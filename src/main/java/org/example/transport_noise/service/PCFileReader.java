@@ -1,0 +1,192 @@
+package org.example.transport_noise.service;
+
+import org.example.transport_noise.model.FileAnalysisResult;
+import org.example.transport_noise.model.FileHeader;
+import java.io.*;
+import java.nio.ByteBuffer;
+import java.nio.ByteOrder;
+import java.util.ArrayList;
+import java.util.List;
+
+public class PCFileReader {
+    private VarianceCalculator varianceCalculator;
+
+    public PCFileReader() {
+        this.varianceCalculator = new VarianceCalculator();
+    }
+
+    public List<FileAnalysisResult> parseDirectory(String path) throws IOException {
+        List<FileAnalysisResult> results = new ArrayList<>();
+        File dir = new File(path);
+
+        System.out.println("Директория: " + dir.getAbsolutePath());
+
+        if (!dir.exists() || !dir.isDirectory()) {
+            throw new IOException("Директория не найдена: " + path);
+        }
+
+        File[] files = dir.listFiles();
+
+        if (files == null || files.length == 0) {
+            throw new IOException("Нет файлов в директории");
+        }
+
+        for (File file : files) {
+            if (file.isFile()) {
+                try {
+                    System.out.println("\nФайл: " + file.getName() + " (размер: " + file.length() + " байт)");
+                    FileAnalysisResult result = parseFile(file);
+                    if (result != null && !result.getVariances().isEmpty()) {
+                        results.add(result);
+                        System.out.println("  - УСПЕШНО обработан");
+                    }
+                } catch (Exception e) {
+                    System.err.println("  - ОШИБКА: " + e.getMessage());
+                    e.printStackTrace();
+                }
+            }
+        }
+
+        System.out.println("\nИтого обработано: " + results.size());
+        return results;
+    }
+
+    public FileAnalysisResult parseFile(File file) throws IOException {
+        try (FileInputStream fis = new FileInputStream(file);
+             BufferedInputStream bis = new BufferedInputStream(fis)) {
+
+            // 1. Читаем заголовок 42 байта
+            byte[] headerBytes = new byte[42];
+            int read = bis.read(headerBytes);
+            if (read != 42) {
+                throw new IOException("Не удалось прочитать заголовок (42 байта), прочитано: " + read);
+            }
+
+            FileHeader header = parseHeader(headerBytes);
+            System.out.println(header);
+
+            // 2. Получаем параметры из заголовка
+            int sampleSize = header.getSampleSize();
+            int samplesToRead = header.getSamplNum();
+            int sampleRate = header.getSamplRate() & 0xFFFF;
+            if (sampleRate == 0) sampleRate = 1000;
+
+            System.out.println("\n  Параметры:");
+            System.out.println("    Тип данных: " + header.getSampleTypeString());
+            System.out.println("    Размер отсчёта: " + sampleSize + " байт");
+            System.out.println("    Ожидаемое число отсчётов: " + samplesToRead);
+            System.out.println("    Частота: " + sampleRate + " Гц");
+            System.out.println("    Scale: " + header.getScale());
+
+            // 3. Читаем данные отсчётов
+            List<Double> samples = new ArrayList<>();
+
+            // Пропускаем заголовок (мы его уже прочитали)
+            // Читаем все оставшиеся байты
+            byte[] remainingBytes = bis.readAllBytes();
+            System.out.println("    Осталось байт в файле: " + remainingBytes.length);
+
+            if (remainingBytes.length > 0) {
+                samples = parseSamples(remainingBytes, header.getSamplType(), header.getScale());
+            }
+
+            System.out.println("    Фактически прочитано отсчётов: " + samples.size());
+
+            // 4. Самопроверка - первые 20 отсчётов
+            System.out.println("\n=== САМОПРОВЕРКА ===");
+            System.out.println("Первые 20 отсчётов (после пересчета с scale=" + header.getScale() + "):");
+            for (int i = 0; i < Math.min(20, samples.size()); i++) {
+                System.out.printf("  [%d]: %.6f\n", i + 1, samples.get(i));
+            }
+
+            // 5. Вычисляем дисперсию по секундам
+            List<Double> variances = varianceCalculator.calculatePerSecond(samples, sampleRate);
+            int seconds = (int) Math.ceil((double) samples.size() / sampleRate);
+
+            System.out.println("\n=== СТАТИСТИКА ===");
+            System.out.println("  Частота дискретизации: " + sampleRate + " Гц");
+            System.out.println("  Всего секунд: " + seconds);
+            System.out.println("  Всего отсчётов: " + samples.size());
+
+            if (!variances.isEmpty()) {
+                System.out.println("  Дисперсия (1-я секунда): " + variances.get(0));
+                System.out.println("  Дисперсия (min): " + variances.stream().min(Double::compareTo).orElse(0.0));
+                System.out.println("  Дисперсия (max): " + variances.stream().max(Double::compareTo).orElse(0.0));
+                System.out.println("  Дисперсия (avg): " + variances.stream().mapToDouble(Double::doubleValue).average().orElse(0.0));
+            }
+
+            return new FileAnalysisResult(file.getName(), variances, samples, samples.size(), seconds, header);
+        }
+    }
+
+    private FileHeader parseHeader(byte[] header) {
+        ByteBuffer bb = ByteBuffer.wrap(header).order(ByteOrder.LITTLE_ENDIAN);
+
+        short id = bb.getShort();                    // +00
+        byte[] reserv = new byte[4];
+        bb.get(reserv);                               // +02-+05
+        float lat = bb.getFloat();                   // +06
+        float lon = bb.getFloat();                   // +10
+        double scale = bb.getDouble();               // +14
+        byte year = bb.get();                        // +22
+        byte month = bb.get();                       // +23
+        byte day = bb.get();                         // +24
+        byte hour = bb.get();                        // +25
+        byte minute = bb.get();                      // +26
+        byte second = bb.get();                      // +27
+        int microSec = bb.getInt();                  // +28
+        short samplRate = bb.getShort();             // +32
+        int samplNum = bb.getInt();                  // +34
+        short samplType = bb.getShort();             // +38
+        byte trNum = bb.get();                       // +40
+        byte reserved = bb.get();                    // +41
+
+        return new FileHeader(id, reserv, lat, lon, scale, year, month, day,
+                hour, minute, second, microSec, samplRate,
+                samplNum, samplType, trNum, reserved);
+    }
+
+    private List<Double> parseSamples(byte[] data, short sampleType, double scale) {
+        List<Double> samples = new ArrayList<>();
+        ByteBuffer bb = ByteBuffer.wrap(data).order(ByteOrder.LITTLE_ENDIAN);
+
+        System.out.println("    Парсинг данных: " + data.length + " байт");
+
+        switch (sampleType) {
+            case 0x0002: // short (16-bit знаковый)
+                while (bb.remaining() >= 2) {
+                    short val = bb.getShort();
+                    samples.add(val * scale);
+                }
+                break;
+
+            case 0x0004: // int (32-bit знаковый)
+                while (bb.remaining() >= 4) {
+                    int val = bb.getInt();
+                    samples.add(val * scale);
+                }
+                break;
+
+            case 0x1004: // float (32-bit плавающая)
+                while (bb.remaining() >= 4) {
+                    float val = bb.getFloat();
+                    samples.add(val * scale);
+                }
+                break;
+
+            case 0x1008: // double (64-bit)
+                while (bb.remaining() >= 8) {
+                    double val = bb.getDouble();
+                    samples.add(val * scale);
+                }
+                break;
+
+            default:
+                System.err.println("    Неизвестный тип отсчёта: 0x" +
+                        Integer.toHexString(sampleType & 0xFFFF));
+        }
+
+        System.out.println("    Распарсено отсчётов: " + samples.size());
+        return samples;
+    }
+}
