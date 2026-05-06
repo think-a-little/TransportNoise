@@ -18,9 +18,9 @@ public class MainFrame extends JFrame {
     private JTextArea previewArea;
     private JPanel chartPanel;
     private JComboBox<String> fileSelect;
+    private MapPanel mapPanel;  // <-- ДОБАВЛЕНО
 
     public MainFrame() {
-
         chartBuilder = new ChartBuilder();
         parser = new PCFileReader();
         results = null;
@@ -37,9 +37,20 @@ public class MainFrame extends JFrame {
 
     private JPanel createTopPanel() {
         JPanel panel = new JPanel();
+
         JButton selectBtn = new JButton("Выбрать папку с файлами");
+        JButton showAllPointsBtn = new JButton("Показать все точки на карте");  // <-- НОВАЯ КНОПКА
+
         selectBtn.addActionListener(e -> selectDirectory());
+        showAllPointsBtn.addActionListener(e -> {                               // <-- ОБРАБОТЧИК
+            if (results != null && !results.isEmpty() && mapPanel != null) {
+                mapPanel.showMultipleLocations(results);
+            }
+        });
+
         panel.add(selectBtn);
+        panel.add(showAllPointsBtn);                                            // <-- ДОБАВЛЕНА КНОПКА
+
         return panel;
     }
 
@@ -66,6 +77,10 @@ public class MainFrame extends JFrame {
         previewArea = new JTextArea();
         previewArea.setFont(new Font("Monospaced", Font.PLAIN, 12));
         tabs.addTab("Самопроверка", new JScrollPane(previewArea));
+
+        // ДОБАВЛЯЕМ КАРТУ
+        mapPanel = new MapPanel();
+        tabs.addTab("Карта", mapPanel);
 
         panel.add(tabs, BorderLayout.CENTER);
         return panel;
@@ -119,7 +134,6 @@ public class MainFrame extends JFrame {
             showFile(fileSelect.getSelectedIndex());
         }
     }
-// В методе showFile добавь отображение графиков сигнала:
 
     private void showFile(int index) {
         FileAnalysisResult result = results.get(index);
@@ -191,5 +205,10 @@ public class MainFrame extends JFrame {
         sb.append("  • Колесо мыши - масштабирование\n");
 
         previewArea.setText(sb.toString());
+
+        // ОБНОВЛЯЕМ КАРТУ
+        if (mapPanel != null) {
+            mapPanel.showLocation(result);
+        }
     }
 }
