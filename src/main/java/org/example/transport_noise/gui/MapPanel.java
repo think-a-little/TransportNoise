@@ -63,35 +63,22 @@ public class MapPanel extends JPanel {
         add(statusLabel, BorderLayout.SOUTH);
     }
 
-    public void showLocation(FileAnalysisResult result) {
-        if (result == null || result.getHeader() == null) {
-            statusLabel.setText(" Нет данных о местоположении");
-            return;
-        }
-
-        float lat = result.getHeader().getLat();
-        float lon = result.getHeader().getLon();
-
+    public void showLocation(double lat, double lon, String label) {
         if (lat == 0 && lon == 0) {
-            statusLabel.setText(" Координаты не заданы: " + result.getFileName());
+            statusLabel.setText("Координаты не заданы");
             return;
         }
 
-        // Очищаем старые точки
         clearWaypoints();
-
-        // Добавляем новую точку
         addWaypoint(lat, lon);
 
-        // Обновляем карту - центрируем на точке
         SwingUtilities.invokeLater(() -> {
             mapViewer.setAddressLocation(new GeoPosition(lat, lon));
             mapViewer.setZoom(10);
             mapViewer.repaint();
         });
 
-        statusLabel.setText(String.format(" %s | Lat: %.6f | Lon: %.6f",
-                result.getFileName(), lat, lon));
+        statusLabel.setText(String.format("%s | Lat: %.6f | Lon: %.6f", label, lat, lon));
     }
 
     public void showMultipleLocations(List<FileAnalysisResult> results) {

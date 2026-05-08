@@ -76,7 +76,27 @@ public class PCFileReader {
             System.out.println("    Размер отсчёта: " + sampleSize + " байт");
             System.out.println("    Ожидаемое число отсчётов: " + samplesToRead);
             System.out.println("    Частота: " + sampleRate + " Гц");
-            System.out.println("    Scale: " + header.getScale());
+
+            // ====== ВЫВОД SCALE В ТЕРМИНАЛ ======
+            double scale = header.getScale();
+            System.out.println("    ⚖️  SCALE (коэффициент пересчета): " + scale);
+
+            // Дополнительная информация о scale
+            if (scale == 0.0) {
+                System.out.println("    ⚠️  ВНИМАНИЕ: Scale равен 0! Данные не масштабируются!");
+                System.out.println("    ⚠️  Все значения будут равны 0. Проверьте заголовок файла.");
+            } else if (scale == 1.0) {
+                System.out.println("    ℹ️  Scale = 1.0 - данные в исходных единицах АЦП");
+            } else if (scale < 0.0001) {
+                System.out.println("    ℹ️  Scale очень маленький (" + scale + ") - возможно, данные в вольтах или паскалях");
+            } else if (scale > 1000) {
+                System.out.println("    ℹ️  Scale большой (" + scale + ") - возможно, данные в милли- или микроединицах");
+            }
+
+            // Выводим информацию о единицах измерения
+            System.out.println("    📏 Амплитуда сигнала = значение_отсчёта × " + scale);
+            System.out.println("    📏 Дисперсия = квадрат амплитуды (условные единицы²)");
+            // ====== КОНЕЦ ВЫВОДА SCALE ======
 
             // 3. Читаем данные отсчётов
             List<Double> samples = new ArrayList<>();
@@ -99,6 +119,18 @@ public class PCFileReader {
                 System.out.printf("  [%d]: %.6f\n", i + 1, samples.get(i));
             }
 
+            // Дополнительная проверка: если все значения нулевые
+            if (!samples.isEmpty()) {
+                double sum = samples.stream().mapToDouble(Double::doubleValue).sum();
+                if (sum == 0.0) {
+                    System.out.println("  ⚠️  ВНИМАНИЕ: Все значения равны 0!");
+                    System.out.println("  ⚠️  Возможные причины:");
+                    System.out.println("  ⚠️  1. Scale = 0 (проверьте заголовок)");
+                    System.out.println("  ⚠️  2. Файл содержит тишину");
+                    System.out.println("  ⚠️  3. Ошибка при чтении данных");
+                }
+            }
+
             // 5. Вычисляем дисперсию по секундам
             List<Double> variances = varianceCalculator.calculatePerSecond(samples, sampleRate);
             int seconds = (int) Math.ceil((double) samples.size() / sampleRate);
@@ -107,12 +139,20 @@ public class PCFileReader {
             System.out.println("  Частота дискретизации: " + sampleRate + " Гц");
             System.out.println("  Всего секунд: " + seconds);
             System.out.println("  Всего отсчётов: " + samples.size());
+            System.out.println("  Scale: " + scale + " (амплитуда = отсчёт × scale)");
 
             if (!variances.isEmpty()) {
                 System.out.println("  Дисперсия (1-я секунда): " + variances.get(0));
                 System.out.println("  Дисперсия (min): " + variances.stream().min(Double::compareTo).orElse(0.0));
                 System.out.println("  Дисперсия (max): " + variances.stream().max(Double::compareTo).orElse(0.0));
                 System.out.println("  Дисперсия (avg): " + variances.stream().mapToDouble(Double::doubleValue).average().orElse(0.0));
+
+                // Выводим интерпретацию дисперсии
+                System.out.println("\n  📊 Интерпретация дисперсии:");
+                System.out.println("  • Дисперсия измеряется в квадрате единиц амплитуды");
+                System.out.println("  • Амплитуда измеряется в условных единицах × " + scale);
+                System.out.println("  • Для получения СКО (среднеквадратичного отклонения): √дисперсия");
+                System.out.println("  • СКО будет в тех же единицах, что и амплитуда");
             }
 
             return new FileAnalysisResult(file.getName(), variances, samples, samples.size(), seconds, header);

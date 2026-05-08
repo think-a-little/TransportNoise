@@ -59,8 +59,16 @@ public class FileHeader {
     public byte getTrNum() { return trNum; }
 
     public String getDateTime() {
+        int y = year & 0xFF;
+        // Если год меньше 100, считаем что это 2000+год
+        if (y < 100) {
+            y += 2000;
+        } else if (y < 1900) {
+            y += 1900;
+        }
+
         return String.format("%04d-%02d-%02d %02d:%02d:%02d.%06d",
-                1900 + (year & 0xFF), month & 0xFF, day & 0xFF,
+                y, month & 0xFF, day & 0xFF,
                 hour & 0xFF, minute & 0xFF, second & 0xFF, microSec);
     }
 
@@ -86,12 +94,21 @@ public class FileHeader {
 
     @Override
     public String toString() {
+        int y = year & 0xFF;
+        if (y < 100) {
+            y += 2000;
+        } else if (y < 1900) {
+            y += 1900;
+        }
+
         StringBuilder sb = new StringBuilder();
         sb.append("=== HEADER ===\n");
         sb.append("ID: ").append((char)(id & 0xFF)).append((char)((id >> 8) & 0xFF)).append("\n");
         sb.append("Lat/Lon: ").append(lat).append(" / ").append(lon).append("\n");
         sb.append("Scale: ").append(scale).append("\n");
-        sb.append("DateTime: ").append(getDateTime()).append("\n");
+        sb.append("DateTime: ").append(String.format("%04d-%02d-%02d %02d:%02d:%02d.%06d",
+                y, month & 0xFF, day & 0xFF,
+                hour & 0xFF, minute & 0xFF, second & 0xFF, microSec)).append("\n");
         sb.append("SampleRate: ").append(samplRate & 0xFFFF).append(" Hz\n");
         sb.append("SamplesNum: ").append(samplNum).append("\n");
         sb.append("SampleType: ").append(getSampleTypeString()).append("\n");
