@@ -202,7 +202,7 @@ public class MainFrame extends JFrame {
                  ResultSet rs = stmt.executeQuery(mainSql)) {
 
                 if (rs.next()) {
-                    sb.append("📊 СТАТИСТИКА БАЗЫ ДАННЫХ:\n");
+                    sb.append("СТАТИСТИКА БАЗЫ ДАННЫХ:\n");
                     sb.append("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n");
 
                     int files = rs.getInt("files");
@@ -236,7 +236,7 @@ public class MainFrame extends JFrame {
             }
 
             // Статистика по файлам
-            sb.append("\n📋 ДАННЫЕ ПО ФАЙЛАМ:\n");
+            sb.append("\nДАННЫЕ ПО ФАЙЛАМ:\n");
             sb.append("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n");
 
             String filesSql = "SELECT " +
@@ -310,7 +310,7 @@ public class MainFrame extends JFrame {
             }
 
             // Статистика дисперсии
-            sb.append("\n📊 СТАТИСТИКА ДИСПЕРСИИ:\n");
+            sb.append("\nСТАТИСТИКА ДИСПЕРСИИ:\n");
             sb.append("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n");
 
             String varSql = "SELECT " +
@@ -399,19 +399,19 @@ public class MainFrame extends JFrame {
         gbc.gridx = 0; gbc.gridy = 4; gbc.gridwidth = 3;
         JPanel buttonPanel = new JPanel(new FlowLayout(FlowLayout.LEFT));
 
-        JButton signalBtn = new JButton("📈 Сигнал");
+        JButton signalBtn = new JButton("Сигнал");
         signalBtn.addActionListener(e -> loadAndShowSignal());
         buttonPanel.add(signalBtn);
 
-        JButton varianceBtn = new JButton("📊 Дисперсия");
+        JButton varianceBtn = new JButton("Дисперсия");
         varianceBtn.addActionListener(e -> loadAndShowVariance());
         buttonPanel.add(varianceBtn);
 
-        JButton bothBtn = new JButton("📋 Сигнал + Дисперсия");
+        JButton bothBtn = new JButton("Сигнал + Дисперсия");
         bothBtn.addActionListener(e -> loadAndShowBoth());
         buttonPanel.add(bothBtn);
 
-        JButton clearBtn = new JButton("🗑️ Очистить БД");
+        JButton clearBtn = new JButton("Очистить БД");
         clearBtn.setBackground(new Color(255, 200, 200));
         clearBtn.addActionListener(e -> clearDatabase());
         buttonPanel.add(clearBtn);
@@ -425,7 +425,7 @@ public class MainFrame extends JFrame {
 
         chartPanel = new JPanel(new BorderLayout());
         chartPanel.add(new JLabel("Выберите файл, трассу и нажмите кнопку", SwingConstants.CENTER));
-        tabs.addTab("📈 Графики", chartPanel);
+        tabs.addTab("Графики", chartPanel);
 
         tableModel = new DefaultTableModel(
                 new String[]{"Файл", "Трасса", "Начало", "Отсчётов", "Координаты"}, 0) {
@@ -433,15 +433,15 @@ public class MainFrame extends JFrame {
             public boolean isCellEditable(int row, int column) { return false; }
         };
         dataTable = new JTable(tableModel);
-        tabs.addTab("📊 Данные", new JScrollPane(dataTable));
+        tabs.addTab("Данные", new JScrollPane(dataTable));
 
         infoArea = new JTextArea();
         infoArea.setEditable(false);
         infoArea.setFont(new Font("Monospaced", Font.PLAIN, 12));
-        tabs.addTab("ℹ️ Информация", new JScrollPane(infoArea));
+        tabs.addTab("Информация", new JScrollPane(infoArea));
 
         mapPanel = new MapPanel();
-        tabs.addTab("🗺️ Карта", mapPanel);
+        tabs.addTab("Карта", mapPanel);
 
         JPanel panel = new JPanel(new BorderLayout());
         panel.add(tabs, BorderLayout.CENTER);

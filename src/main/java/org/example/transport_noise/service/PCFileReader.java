@@ -15,41 +15,6 @@ public class PCFileReader {
         this.varianceCalculator = new VarianceCalculator();
     }
 
-    public List<FileAnalysisResult> parseDirectory(String path) throws IOException {
-        List<FileAnalysisResult> results = new ArrayList<>();
-        File dir = new File(path);
-
-        System.out.println("Директория: " + dir.getAbsolutePath());
-
-        if (!dir.exists() || !dir.isDirectory()) {
-            throw new IOException("Директория не найдена: " + path);
-        }
-
-        File[] files = dir.listFiles();
-
-        if (files == null || files.length == 0) {
-            throw new IOException("Нет файлов в директории");
-        }
-
-        for (File file : files) {
-            if (file.isFile()) {
-                try {
-                    System.out.println("\nФайл: " + file.getName() + " (размер: " + file.length() + " байт)");
-                    FileAnalysisResult result = parseFile(file);
-                    if (result != null && !result.getVariances().isEmpty()) {
-                        results.add(result);
-                        System.out.println("  - УСПЕШНО обработан");
-                    }
-                } catch (Exception e) {
-                    System.err.println("  - ОШИБКА: " + e.getMessage());
-                    e.printStackTrace();
-                }
-            }
-        }
-
-        System.out.println("\nИтого обработано: " + results.size());
-        return results;
-    }
 
     public FileAnalysisResult parseFile(File file) throws IOException {
         try (FileInputStream fis = new FileInputStream(file);
