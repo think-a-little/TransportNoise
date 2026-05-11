@@ -5,6 +5,7 @@ import org.jfree.chart.*;
 import org.jfree.chart.annotations.XYPointerAnnotation;
 import org.jfree.chart.axis.NumberAxis;
 import org.jfree.chart.panel.CrosshairOverlay;
+import org.jfree.chart.plot.ValueMarker;
 import org.jfree.chart.plot.XYPlot;
 import org.jfree.chart.plot.PlotOrientation;
 import org.jfree.chart.renderer.xy.XYLineAndShapeRenderer;
@@ -15,9 +16,12 @@ import java.awt.*;
 import java.awt.event.ComponentAdapter;
 import java.awt.event.ComponentEvent;
 import java.awt.event.MouseEvent;
+import java.awt.geom.Ellipse2D;
 import java.awt.geom.Rectangle2D;
 import java.text.DecimalFormat;
 import java.util.List;
+
+
 
 public class ChartBuilder {
 
@@ -416,6 +420,225 @@ public class ChartBuilder {
         );
 
         customizeChart(chart);
+
+        ChartPanel chartPanel = new ChartPanel(chart);
+        configureZooming(chartPanel);
+
+        return chartPanel;
+    }
+
+    /**
+     * Создание стилизованной кнопки
+     */
+    private JButton createStyledButton(String text, Color bgColor) {
+        JButton button = new JButton(text);
+        button.setFont(new Font("Segoe UI", Font.BOLD, 12));
+        button.setBackground(bgColor);
+        button.setForeground(Color.WHITE);
+        button.setBorder(BorderFactory.createEmptyBorder(8, 16, 8, 16));
+        button.setFocusPainted(false);
+        button.setCursor(new Cursor(Cursor.HAND_CURSOR));
+
+        // Эффект при наведении
+        button.addMouseListener(new java.awt.event.MouseAdapter() {
+            public void mouseEntered(java.awt.event.MouseEvent evt) {
+                button.setBackground(bgColor.brighter());
+            }
+            public void mouseExited(java.awt.event.MouseEvent evt) {
+                button.setBackground(bgColor);
+            }
+        });
+
+        return button;
+    }
+
+
+    /**
+     * График азимута
+     */
+    public JPanel createAzimuthChart(List<Double> azimuths, int sampleRate, String title) {
+        XYSeries series = new XYSeries("Азимут");
+
+        int step = Math.max(1, azimuths.size() / 5000);
+        for (int i = 0; i < azimuths.size(); i += step) {
+            double time = (double) i / sampleRate;
+            series.add(time, azimuths.get(i));
+        }
+
+        XYSeriesCollection dataset = new XYSeriesCollection(series);
+        JFreeChart chart = ChartFactory.createXYLineChart(
+                "Азимут на источник - " + title,
+                "Время (сек)",
+                "Азимут (градусы)",
+                dataset,
+                PlotOrientation.VERTICAL,
+                true, true, false
+        );
+
+        customizeChart(chart);
+
+        // Добавляем линии основных направлений
+        XYPlot plot = chart.getXYPlot();
+        plot.addRangeMarker(new ValueMarker(0, Color.RED, new BasicStroke(1.5f)));
+        plot.addRangeMarker(new ValueMarker(90, Color.GRAY, new BasicStroke(0.5f)));
+        plot.addRangeMarker(new ValueMarker(180, Color.GRAY, new BasicStroke(0.5f)));
+        plot.addRangeMarker(new ValueMarker(270, Color.GRAY, new BasicStroke(0.5f)));
+        plot.addRangeMarker(new ValueMarker(360, Color.RED, new BasicStroke(1.5f)));
+
+        ChartPanel chartPanel = new ChartPanel(chart);
+        configureZooming(chartPanel);
+
+        return chartPanel;
+    }
+
+    /**
+     * График STA/LTA с отметками событий
+     */
+    public JPanel createSTATLTChart(List<Double> signal, List<Integer> events,
+                                    int sampleRate, String title) {
+        XYSeries signalSeries = new XYSeries("Результирующая амплитуда");
+        XYSeries eventSeries = new XYSeries("События");
+
+        int step = Math.max(1, signal.size() / 10000);
+
+        // Основной сигнал
+        for (int i = 0; i < signal.size(); i += step) {
+            double time = (double) i / sampleRate;
+            signalSeries.add(time, signal.get(i));
+        }
+
+        // Маркеры событий
+        for (int eventPoint : events) {
+            if (eventPoint < signal.size()) {
+                double time = (double) eventPoint / sampleRate;
+                double amplitudeAtEvent = signal.get(eventPoint);
+                eventSeries.add(time, amplitudeAtEvent * 1.3);
+            }
+        }
+
+        XYSeriesCollection dataset = new XYSeriesCollection();
+        dataset.addSeries(signalSeries);
+        dataset.addSeries(eventSeries);
+
+        JFreeChart chart = ChartFactory.createXYLineChart(
+                "Обнаружение событий (STA/LTA) - " + title,
+                "Время (сек)",
+                "Амплитуда",
+                dataset,
+                PlotOrientation.VERTICAL,
+                true, true, false
+        );
+
+        customizeChart(chart);
+
+        // Настраиваем отображение
+        XYPlot plot = chart.getXYPlot();
+        XYLineAndShapeRenderer renderer = new XYLineAndShapeRenderer();
+        renderer.setSeriesLinesVisible(0, true);
+        renderer.setSeriesShapesVisible(0, false);
+        renderer.setSeriesLinesVisible(1, false);
+        renderer.setSeriesShapesVisible(1, true);
+        renderer.setSeriesShape(1, new Ellipse2D.Double(-4, -4, 8, 8));
+        renderer.setSeriesPaint(1, Color.RED);
+        plot.setRenderer(renderer);
+
+        ChartPanel chartPanel = new ChartPanel(chart);
+        configureZooming(chartPanel);
+
+        return chartPanel;
+    }
+
+
+    /**
+     * График азимута с реальным временем
+     */
+    public JPanel createAzimuthChartWithTime(List<Double> times, List<Double> azimuths, String title) {
+        XYSeries series = new XYSeries("Азимут");
+
+        int size = Math.min(times.size(), azimuths.size());
+        for (int i = 0; i < size; i++) {
+            double timeVal = times.get(i).doubleValue();
+            double azVal = azimuths.get(i).doubleValue();
+            series.add(timeVal, azVal);
+        }
+
+        XYSeriesCollection dataset = new XYSeriesCollection(series);
+        JFreeChart chart = ChartFactory.createXYLineChart(
+                "Азимут на источник - " + title,
+                "Время (сек)",
+                "Азимут (градусы)",
+                dataset,
+                PlotOrientation.VERTICAL,
+                true, true, false
+        );
+
+        customizeChart(chart);
+
+        // Добавляем линии направлений
+        XYPlot plot = chart.getXYPlot();
+        plot.addRangeMarker(new ValueMarker(0, Color.RED, new BasicStroke(1.5f)));
+        plot.addRangeMarker(new ValueMarker(90, Color.GRAY, new BasicStroke(0.5f)));
+        plot.addRangeMarker(new ValueMarker(180, Color.GRAY, new BasicStroke(0.5f)));
+        plot.addRangeMarker(new ValueMarker(270, Color.GRAY, new BasicStroke(0.5f)));
+        plot.addRangeMarker(new ValueMarker(360, Color.RED, new BasicStroke(1.5f)));
+
+        ChartPanel chartPanel = new ChartPanel(chart);
+        configureZooming(chartPanel);
+
+        return chartPanel;
+    }
+
+    /**
+     * График STA/LTA с реальным временем
+     */
+    public JPanel createSTATLTChartWithTime(List<Double> times, List<Double> signal,
+                                            List<Integer> events, String title) {
+        XYSeries signalSeries = new XYSeries("Результирующая амплитуда");
+        XYSeries eventSeries = new XYSeries("События");
+
+        int size = Math.min(times.size(), signal.size());
+
+        // Основной сигнал
+        for (int i = 0; i < size; i++) {
+            double timeVal = times.get(i).doubleValue();
+            double sigVal = signal.get(i).doubleValue();
+            signalSeries.add(timeVal, sigVal);
+        }
+
+        // Маркеры событий
+        for (int eventIdx : events) {
+            if (eventIdx < size) {
+                double timeVal = times.get(eventIdx).doubleValue();
+                double sigVal = signal.get(eventIdx).doubleValue() * 1.3;
+                eventSeries.add(timeVal, sigVal);
+            }
+        }
+
+        XYSeriesCollection dataset = new XYSeriesCollection();
+        dataset.addSeries(signalSeries);
+        dataset.addSeries(eventSeries);
+
+        JFreeChart chart = ChartFactory.createXYLineChart(
+                "Обнаружение событий (STA/LTA) - " + title,
+                "Время (сек)",
+                "Амплитуда",
+                dataset,
+                PlotOrientation.VERTICAL,
+                true, true, false
+        );
+
+        customizeChart(chart);
+
+        // Настраиваем отображение
+        XYPlot plot = chart.getXYPlot();
+        XYLineAndShapeRenderer renderer = new XYLineAndShapeRenderer();
+        renderer.setSeriesLinesVisible(0, true);
+        renderer.setSeriesShapesVisible(0, false);   // Сигнал - линия
+        renderer.setSeriesLinesVisible(1, false);
+        renderer.setSeriesShapesVisible(1, true);    // События - точки
+        renderer.setSeriesShape(1, new java.awt.geom.Ellipse2D.Double(-4, -4, 8, 8));
+        renderer.setSeriesPaint(1, new Color(0, 100, 255));
+        plot.setRenderer(renderer);
 
         ChartPanel chartPanel = new ChartPanel(chart);
         configureZooming(chartPanel);

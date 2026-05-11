@@ -55,44 +55,109 @@ public class DatabaseService {
     }
 
     private void createTablesIfNotExist(Connection conn) throws SQLException {
+        System.out.println("\n🔧 Проверка и создание таблиц...");
+
         try (Statement stmt = conn.createStatement()) {
 
-            // signal_data
-            String createSignalData =
-                    "CREATE TABLE IF NOT EXISTS signal_data (" +
-                            "    id BIGSERIAL PRIMARY KEY," +
-                            "    file_name TEXT NOT NULL," +
-                            "    record_start_time TIMESTAMP WITH TIME ZONE NOT NULL," +
-                            "    latitude DOUBLE PRECISION NOT NULL," +
-                            "    longitude DOUBLE PRECISION NOT NULL," +
-                            "    record_time TIMESTAMP WITH TIME ZONE NOT NULL," +
-                            "    value DOUBLE PRECISION NOT NULL," +
-                            "    trace_number SMALLINT DEFAULT 1," +
-                            "    created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()" +
-                            ")";
-            stmt.execute(createSignalData);
-            System.out.println("   ✅ signal_data");
+            // 1. Таблица signal_data
+            if (!tableExists(conn, "signal_data")) {
+                System.out.println("   📊 Создание таблицы signal_data...");
 
-            // signal_statistics
-            String createSignalStatistics =
-                    "CREATE TABLE IF NOT EXISTS signal_statistics (" +
-                            "    id BIGSERIAL PRIMARY KEY," +
-                            "    file_name TEXT NOT NULL," +
-                            "    record_start_time TIMESTAMP WITH TIME ZONE NOT NULL," +
-                            "    second_number INTEGER NOT NULL," +
-                            "    variance DOUBLE PRECISION NOT NULL," +
-                            "    sample_count INTEGER NOT NULL," +
-                            "    latitude DOUBLE PRECISION NOT NULL," +
-                            "    longitude DOUBLE PRECISION NOT NULL," +
-                            "    UNIQUE(file_name, second_number)" +
-                            ")";
-            stmt.execute(createSignalStatistics);
-            System.out.println("   ✅ signal_statistics");
+                String createSignalData =
+                        "CREATE TABLE signal_data (" +
+                                "    id BIGSERIAL PRIMARY KEY," +
+                                "    file_name TEXT NOT NULL," +
+                                "    record_start_time TIMESTAMP WITH TIME ZONE NOT NULL," +
+                                "    latitude DOUBLE PRECISION NOT NULL," +
+                                "    longitude DOUBLE PRECISION NOT NULL," +
+                                "    record_time TIMESTAMP WITH TIME ZONE NOT NULL," +
+                                "    value DOUBLE PRECISION NOT NULL," +
+                                "    trace_number SMALLINT DEFAULT 1," +
+                                "    created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()" +
+                                ")";
+                stmt.execute(createSignalData);
+                System.out.println("   ✅ Таблица signal_data создана");
+            } else {
+                System.out.println("   ✅ Таблица signal_data существует");
+            }
 
-            // Индексы
-            stmt.execute("CREATE INDEX IF NOT EXISTS idx_signal_data_time ON signal_data(record_time)");
-            stmt.execute("CREATE INDEX IF NOT EXISTS idx_signal_data_trace ON signal_data(trace_number)");
-            stmt.execute("CREATE INDEX IF NOT EXISTS idx_signal_data_trace_time ON signal_data(trace_number, record_time)");
+            // 2. Таблица signal_statistics
+            if (!tableExists(conn, "signal_statistics")) {
+                System.out.println("   📊 Создание таблицы signal_statistics...");
+
+                String createSignalStatistics =
+                        "CREATE TABLE signal_statistics (" +
+                                "    id BIGSERIAL PRIMARY KEY," +
+                                "    file_name TEXT NOT NULL," +
+                                "    record_start_time TIMESTAMP WITH TIME ZONE NOT NULL," +
+                                "    second_number INTEGER NOT NULL," +
+                                "    variance DOUBLE PRECISION NOT NULL," +
+                                "    sample_count INTEGER NOT NULL," +
+                                "    latitude DOUBLE PRECISION NOT NULL," +
+                                "    longitude DOUBLE PRECISION NOT NULL," +
+                                "    UNIQUE(file_name, second_number)" +
+                                ")";
+                stmt.execute(createSignalStatistics);
+                System.out.println("   ✅ Таблица signal_statistics создана");
+            } else {
+                System.out.println("   ✅ Таблица signal_statistics существует");
+            }
+
+            // 3. Таблица three_component_analysis (ПЕРЕСОЗДАЕМ ПРИНУДИТЕЛЬНО)
+            System.out.println("   📊 Пересоздание таблицы three_component_analysis...");
+
+            // Удаляем старую версию
+            try {
+                stmt.execute("DROP TABLE IF EXISTS three_component_analysis CASCADE");
+                System.out.println("   🗑️  Старая таблица удалена");
+            } catch (SQLException e) {
+                // Таблицы нет - это нормально
+            }
+
+            // Создаем новую с правильной структурой
+            String createThreeCompTable =
+                    "CREATE TABLE three_component_analysis (" +
+                            "    id BIGSERIAL PRIMARY KEY," +
+                            "    station_name TEXT NOT NULL," +
+                            "    timestamp TIMESTAMP WITH TIME ZONE DEFAULT NOW()," +
+                            "    time_seconds DOUBLE PRECISION," +
+                            "    result_amplitude DOUBLE PRECISION," +
+                            "    azimuth DOUBLE PRECISION," +
+                            "    incidence_angle DOUBLE PRECISION," +
+                            "    polarization DOUBLE PRECISION," +
+                            "    is_event BOOLEAN DEFAULT FALSE," +
+                            "    latitude DOUBLE PRECISION," +
+                            "    longitude DOUBLE PRECISION" +
+                            ")";
+            stmt.execute(createThreeCompTable);
+            System.out.println("   ✅ Таблица three_component_analysis создана с time_seconds");
+
+            // Создаем индексы
+            System.out.println("   📊 Создание индексов...");
+
+            try {
+                stmt.execute("CREATE INDEX IF NOT EXISTS idx_signal_data_file_name ON signal_data(file_name)");
+                stmt.execute("CREATE INDEX IF NOT EXISTS idx_signal_data_record_time ON signal_data(record_time)");
+                stmt.execute("CREATE INDEX IF NOT EXISTS idx_signal_data_location ON signal_data(latitude, longitude)");
+                stmt.execute("CREATE INDEX IF NOT EXISTS idx_signal_data_trace_time ON signal_data(trace_number, record_time)");
+                stmt.execute("CREATE INDEX IF NOT EXISTS idx_statistics_file ON signal_statistics(file_name)");
+                stmt.execute("CREATE INDEX IF NOT EXISTS idx_statistics_time ON signal_statistics(record_start_time)");
+
+                // Индексы для трехкомпонентного анализа
+                stmt.execute("CREATE INDEX IF NOT EXISTS idx_three_comp_station ON three_component_analysis(station_name)");
+                stmt.execute("CREATE INDEX IF NOT EXISTS idx_three_comp_time ON three_component_analysis(time_seconds)");
+                stmt.execute("CREATE INDEX IF NOT EXISTS idx_three_comp_events ON three_component_analysis(is_event)");
+
+                System.out.println("   ✅ Индексы созданы");
+            } catch (SQLException e) {
+                System.out.println("   ℹ️  Индексы уже существуют");
+            }
+
+            // Финальная проверка
+            System.out.println("\n📊 Статус таблиц:");
+            System.out.println("   signal_data: " + (tableExists(conn, "signal_data") ? "✅" : "❌"));
+            System.out.println("   signal_statistics: " + (tableExists(conn, "signal_statistics") ? "✅" : "❌"));
+            System.out.println("   three_component_analysis: " + (tableExists(conn, "three_component_analysis") ? "✅" : "❌"));
         }
     }
 
@@ -495,6 +560,52 @@ public class DatabaseService {
             }
         }
         return variances;
+    }
+
+    /**
+     * Сохранение результатов трехкомпонентного анализа
+     */
+    public void saveThreeComponentResult(String stationName,
+                                         ThreeComponentAnalyzer.ThreeComponentResult result,
+                                         double latitude, double longitude,
+                                         int sampleRate) {  // ← добавьте параметр
+
+        String sql = "INSERT INTO three_component_analysis " +
+                "(station_name, timestamp, time_seconds, result_amplitude, azimuth, " +
+                "incidence_angle, polarization, is_event, latitude, longitude) " +
+                "VALUES (?, NOW(), ?, ?, ?, ?, ?, ?, ?, ?)";
+
+        try (Connection conn = getConnection();
+             PreparedStatement pstmt = conn.prepareStatement(sql)) {
+
+            List<Double> amplitudes = result.getResultAmplitude();
+            List<Double> azimuths = result.getAzimuth();
+            List<Double> incAngles = result.getIncidenceAngle();
+            List<Double> polarizations = result.getPolarization();
+//            int step = Math.max(1, amplitudes.size() / 10000);
+int step = 1;
+            for (int i = 0; i < amplitudes.size(); i += step) {
+                double timeSeconds = (double) i / sampleRate;  // ← реальное время
+
+                pstmt.setString(1, stationName);
+                pstmt.setDouble(2, timeSeconds);  // ← сохраняем время
+                pstmt.setDouble(3, amplitudes.get(i));
+                pstmt.setDouble(4, azimuths.get(i));
+                pstmt.setDouble(5, incAngles.get(i));
+                pstmt.setDouble(6, polarizations.get(i));
+                pstmt.setBoolean(7, result.isKeyEventSample(i));
+                pstmt.setDouble(8, latitude);
+                pstmt.setDouble(9, longitude);
+
+                pstmt.addBatch();
+            }
+
+            pstmt.executeBatch();
+            System.out.println("   ✅ Сохранено точек анализа: " + (amplitudes.size() / step));
+
+        } catch (SQLException e) {
+            System.err.println("   ❌ Ошибка: " + e.getMessage());
+        }
     }
 
     public void shutdown() {
