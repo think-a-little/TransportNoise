@@ -30,12 +30,6 @@ public class ThreeComponentAnalyzer {
             this.cooldownSamples = cooldownSamples;
         }
 
-        public static DetectionParams defaults(int staWindow) {
-            int hang = Math.max(3, staWindow / 4);
-            int minDur = Math.max(2, staWindow / 2);
-            int cool = staWindow;
-            return new DetectionParams(1.2, 0.55, hang, minDur, cool);
-        }
     }
 
     /**
@@ -131,13 +125,11 @@ public class ThreeComponentAnalyzer {
         }
 
         /**
-         * Отметка для БД/графиков: начало, конец и пик основного STA/LTA по результирующей амплитуде.
+         * Отметка для БД: только момент регистрации события (начало), одна точка на запись.
          */
         public boolean isKeyEventSample(int sampleIndex) {
             for (DetectionEvent e : staLtaResultant) {
-                if (sampleIndex == e.getStartSample()
-                        || sampleIndex == e.getEndSample()
-                        || sampleIndex == e.getPeakSample()) {
+                if (sampleIndex == e.getStartSample()) {
                     return true;
                 }
             }
@@ -249,25 +241,50 @@ public class ThreeComponentAnalyzer {
      * Устаревший API: только индексы срабатывания (начала событий после слияния).
      * Предпочтительнее {@link ThreeComponentResult#getStaLtaResultantEvents()}.
      */
+    /**
+     * Детекция с заданными окнами STA/LTA (для экспериментов); возвращает не более одного события (доминирующего).
+     */
     public List<Integer> detectEventsSTA_LTA(List<Double> signal,
                                              int staWindow,
                                              int ltaWindow,
                                              double threshold) {
-        DetectionParams p = new DetectionParams(threshold, 0.55,
-                Math.max(3, staWindow / 4),
-                Math.max(2, staWindow / 2),
-                staWindow);
+        int hang = Math.max(8, staWindow / 3);
+        int minDur = Math.max(staWindow, staWindow * 2 / 3);
+        DetectionParams p = new DetectionParams(threshold, 0.72, hang, minDur, ltaWindow);
         double[] ratio = StaLtaEventDetector.absStaLtaRatio(signal, staWindow, ltaWindow);
         List<DetectionEvent> ev = StaLtaEventDetector.pickEventsFromRatio(
                 ratio, ltaWindow, p.staLtaThreshold, p.offRatio,
                 p.hangSamples, p.minDurationSamples, p.cooldownSamples, "STA/LTA");
+        ev = StaLtaEventDetector.keepDominantEvent(ev, ratio);
         return ev.stream().map(DetectionEvent::getStartSample).toList();
     }
+
+    /**
+     * Одно доминирующее событие по STA/LTA на результирующей амплитуде (для графиков и отчёта в GUI).
+     */
+    public List<DetectionEvent> detectDominantStaLtaOnSignal(List<Double> signal,
+                                                             int sampleRate,
+                                                             double staSec,
+                                                             double ltaSec,
+                                                             double threshold) {
+        int sta = TransportDetectionTuning.staSamples(sampleRate, staSec);
+        int lta = TransportDetectionTuning.ltaSamples(sampleRate, staSec, ltaSec);
+        DetectionParams p = TransportDetectionTuning.params(sampleRate, staSec, ltaSec, threshold);
+        double[] ratio = StaLtaEventDetector.absStaLtaRatio(signal, sta, lta);
+        List<DetectionEvent> ev = StaLtaEventDetector.pickEventsFromRatio(
+                ratio, lta, p.staLtaThreshold, p.offRatio,
+                p.hangSamples, p.minDurationSamples, p.cooldownSamples, "STA/LTA");
+        return StaLtaEventDetector.keepDominantEvent(ev, ratio);
+    }
+
 
     public ThreeComponentResult fullAnalysis(List<Double> componentX,
                                              List<Double> componentY,
                                              List<Double> componentZ,
-                                             int sampleRate) {
+                                             int sampleRate,
+                                             double staSec,
+                                             double ltaSec,
+                                             double threshold) {
 
         System.out.println("\n🔬 ТРЕХКОМПОНЕНТНЫЙ АНАЛИЗ");
         System.out.println("═".repeat(50));
@@ -318,9 +335,9 @@ public class ThreeComponentAnalyzer {
         System.out.println("   Средняя: " + String.format("%.3f", avgPolarization));
         System.out.println("   Тип: " + interpretPolarization(avgPolarization));
 
-        int staWindow = Math.max(2, sampleRate / 10);
-        int ltaWindow = Math.max(staWindow + 1, sampleRate * 2);
-        DetectionParams det = DetectionParams.defaults(staWindow);
+        int staWindow = TransportDetectionTuning.staSamples(sampleRate, staSec);
+        int ltaWindow = TransportDetectionTuning.ltaSamples(sampleRate, staSec, ltaSec);
+        DetectionParams det = TransportDetectionTuning.params(sampleRate, staSec, ltaSec, threshold);
 
         double[] ratioR = StaLtaEventDetector.absStaLtaRatio(resultAmplitude, staWindow, ltaWindow);
         double[] ratioX = StaLtaEventDetector.absStaLtaRatio(xUse, staWindow, ltaWindow);
@@ -351,6 +368,14 @@ public class ThreeComponentAnalyzer {
         List<DetectionEvent> evMax = StaLtaEventDetector.pickEventsFromRatio(
                 ratioMax, ltaWindow, det.staLtaThreshold, det.offRatio,
                 det.hangSamples, det.minDurationSamples, det.cooldownSamples, "max(X,Y,Z) STA/LTA");
+
+        evR = StaLtaEventDetector.keepDominantEvent(evR, ratioR);
+        evX = StaLtaEventDetector.keepDominantEvent(evX, ratioX);
+        evY = StaLtaEventDetector.keepDominantEvent(evY, ratioY);
+        evZ = StaLtaEventDetector.keepDominantEvent(evZ, ratioZ);
+        evE = StaLtaEventDetector.keepDominantEvent(evE, ratioEnergy);
+        evMin = StaLtaEventDetector.keepDominantEvent(evMin, ratioMin);
+        evMax = StaLtaEventDetector.keepDominantEvent(evMax, ratioMax);
 
         List<Integer> onsetList = evR.stream().map(DetectionEvent::getStartSample).toList();
 
@@ -417,5 +442,344 @@ public class ThreeComponentAnalyzer {
         if (polarization > 0.4) return "Смешанная";
         if (polarization > 0.2) return "Преимущественно эллиптическая";
         return "Низкая (S-волны или шум)";
+    }
+
+    // Добавьте в ThreeComponentAnalyzer.java
+
+    /**
+     * Экспериментальный детектор с произвольными окнами STA/LTA.
+     * Возвращает все события (не только доминирующее) для анализа.
+     */
+    public List<DetectionEvent> detectWithCustomWindows(
+            List<Double> signal,
+            int sampleRate,
+            double staSec,      // STA окно в секундах (например 0.05, 0.1, 0.2, 0.5)
+            double ltaSec,      // LTA окно в секундах (например 1, 2, 5, 10)
+            double threshold,   // Порог (например 1.2, 2.0, 3.0, 4.0)
+            String label) {
+
+        int staWindow = Math.max(2, (int)(staSec * sampleRate));
+        int ltaWindow = Math.max(staWindow + 1, (int)(ltaSec * sampleRate));
+
+        double offRatio = 0.72;
+        int hangSamples = Math.max(3, staWindow / 4);
+        int minDuration = Math.max(staWindow / 2, 5);
+        int cooldownSamples = ltaWindow;
+
+        double[] ratio = StaLtaEventDetector.absStaLtaRatio(signal, staWindow, ltaWindow);
+
+        List<DetectionEvent> events = StaLtaEventDetector.pickEventsFromRatio(
+                ratio, ltaWindow, threshold, offRatio,
+                hangSamples, minDuration, cooldownSamples, label);
+
+        return events;
+    }
+
+    /**
+     * Сравнение разных параметров STA/LTA для исследовательских целей.
+     * Выводит таблицу результатов в консоль.
+     */
+    public void compareStaLtaParameters(
+            List<Double> signalX,
+            List<Double> signalY,
+            List<Double> signalZ,
+            int sampleRate) {
+
+        List<Double> resultR = calculateResultAmplitude(signalX, signalY, signalZ);
+
+        double[] staValues = {0.05, 0.1, 0.2, 0.5};
+        double[] ltaValues = {1.0, 2.0, 5.0, 10.0};
+        double[] thresholds = {1.5, 2.0, 2.5, 3.0, 4.0};
+
+        System.out.println("\n╔══════════════════════════════════════════════════════════════╗");
+        System.out.println("║     ЭКСПЕРИМЕНТ: ВЛИЯНИЕ ПАРАМЕТРОВ STA/LTA                  ║");
+        System.out.println("╚══════════════════════════════════════════════════════════════╝");
+        System.out.printf("%-8s %-8s %-8s %-10s %-10s %-10s %-10s%n",
+                "STA(с)", "LTA(с)", "Thresh", "Событий R", "Событий X", "Событий Y", "Событий Z");
+        System.out.println("─".repeat(70));
+
+        for (double sta : staValues) {
+            for (double lta : ltaValues) {
+                for (double thr : thresholds) {
+                    int eventsR = detectWithCustomWindows(resultR, sampleRate, sta, lta, thr, "R").size();
+                    int eventsX = detectWithCustomWindows(signalX, sampleRate, sta, lta, thr, "X").size();
+                    int eventsY = detectWithCustomWindows(signalY, sampleRate, sta, lta, thr, "Y").size();
+                    int eventsZ = detectWithCustomWindows(signalZ, sampleRate, sta, lta, thr, "Z").size();
+
+                    System.out.printf("%-8.2f %-8.1f %-8.1f %-10d %-10d %-10d %-10d%n",
+                            sta, lta, thr, eventsR, eventsX, eventsY, eventsZ);
+                }
+            }
+        }
+        System.out.println("─".repeat(70));
+        System.out.println("Рекомендация: выберите параметры, дающие 1-3 события на запись.");
+    }
+
+    /**
+     * Полное сравнение всех методов обнаружения для дипломной работы.
+     */
+    public DetectionComparisonResult compareAllMethods(
+            List<Double> x, List<Double> y, List<Double> z,
+            int sampleRate,
+            double staSec,
+            double ltaSec,
+            double threshold) {
+
+        // Полосовая фильтрация
+        double lowCut = Math.max(0.5, sampleRate / 500.0);
+        List<Double> xf = ButterworthBandpass.filter(new ArrayList<>(x), sampleRate, lowCut, 100.0);
+        List<Double> yf = ButterworthBandpass.filter(new ArrayList<>(y), sampleRate, lowCut, 100.0);
+        List<Double> zf = ButterworthBandpass.filter(new ArrayList<>(z), sampleRate, lowCut, 100.0);
+
+        int m = Math.min(Math.min(xf.size(), yf.size()), zf.size());
+        xf = new ArrayList<>(xf.subList(0, m));
+        yf = new ArrayList<>(yf.subList(0, m));
+        zf = new ArrayList<>(zf.subList(0, m));
+
+        // Результирующая амплитуда
+        List<Double> R = calculateResultAmplitude(xf, yf, zf);
+
+        // Параметры детектора
+        int sta = TransportDetectionTuning.staSamples(sampleRate, staSec);
+        int lta = TransportDetectionTuning.ltaSamples(sampleRate, staSec, ltaSec);
+        double offRatio = 0.72;
+        int hang = Math.max(8, sta / 3);
+        int minDur = Math.max(sta, sta * 2 / 3);
+
+        // STA/LTA по каждому каналу отдельно
+        double[] ratioX = StaLtaEventDetector.absStaLtaRatio(xf, sta, lta);
+        double[] ratioY = StaLtaEventDetector.absStaLtaRatio(yf, sta, lta);
+        double[] ratioZ = StaLtaEventDetector.absStaLtaRatio(zf, sta, lta);
+
+        List<DetectionEvent> evX = StaLtaEventDetector.pickEventsFromRatio(
+                ratioX, lta, threshold, offRatio, hang, minDur, lta, "X-отдельно");
+
+        List<DetectionEvent> evY = StaLtaEventDetector.pickEventsFromRatio(
+                ratioY, lta, threshold, offRatio, hang, minDur, lta, "Y-отдельно");
+
+        List<DetectionEvent> evZ = StaLtaEventDetector.pickEventsFromRatio(
+                ratioZ, lta, threshold, offRatio, hang, minDur, lta, "Z-отдельно");
+
+        // STA/LTA по результирующей
+        double[] ratioR = StaLtaEventDetector.absStaLtaRatio(R, sta, lta);
+        List<DetectionEvent> evR = StaLtaEventDetector.pickEventsFromRatio(
+                ratioR, lta, threshold, offRatio, hang, minDur, lta, "R-результ.");
+
+        // Энергетический STA/LTA
+        double[] ratioE = StaLtaEventDetector.energyStaLtaRatio(R, sta, lta);
+        List<DetectionEvent> evE = StaLtaEventDetector.pickEventsFromRatio(
+                ratioE, lta, threshold, offRatio, hang, minDur, lta, "Энергия R");
+
+        // Слияние min/max
+        double[] ratioMin = StaLtaEventDetector.minStaLtaRatio(xf, yf, zf, sta, lta);
+        double[] ratioMax = StaLtaEventDetector.maxStaLtaRatio(xf, yf, zf, sta, lta);
+
+        List<DetectionEvent> evMin = StaLtaEventDetector.pickEventsFromRatio(
+                ratioMin, lta, threshold, offRatio, hang, minDur, lta, "min-фьюжн");
+
+        List<DetectionEvent> evMax = StaLtaEventDetector.pickEventsFromRatio(
+                ratioMax, lta, threshold, offRatio, hang, minDur, lta, "max-фьюжн");
+
+        // Вычисляем азимут и поляризацию
+        List<Double> azimuths = calculateAzimuth(xf, yf);
+        int windowSize = Math.max(2, sampleRate / 10);
+        List<Double> polarization = calculatePolarization(xf, yf, zf, windowSize);
+
+        return new DetectionComparisonResult(
+                R, azimuths, polarization,
+                ratioR, ratioX, ratioY, ratioZ, ratioE, ratioMin, ratioMax,
+                evR, evX, evY, evZ, evE, evMin, evMax,
+                sampleRate, threshold);
+    }
+
+    /**
+     * Экспериментальный детектор с произвольными параметрами STA/LTA.
+     * Возвращает ВСЕ события (не только доминирующее).
+     */
+    public List<DetectionEvent> detectWithCustomParams(
+            List<Double> signal,
+            int sampleRate,
+            double staSec,
+            double ltaSec,
+            double threshold,
+            String label) {
+
+        int staWindow = Math.max(2, (int)(staSec * sampleRate));
+        int ltaWindow = Math.max(staWindow + 1, (int)(ltaSec * sampleRate));
+
+        double offRatio = 0.5;        // Ниже для плавных сигналов
+        int hangSamples = staWindow;  // Дольше держим событие
+        int minDuration = staWindow / 2;
+        int cooldownSamples = ltaWindow;
+
+        double[] ratio = StaLtaEventDetector.absStaLtaRatio(signal, staWindow, ltaWindow);
+
+        List<DetectionEvent> events = StaLtaEventDetector.pickEventsFromRatio(
+                ratio, ltaWindow, threshold, offRatio,
+                hangSamples, minDuration, cooldownSamples, label);
+
+        // Не фильтруем — возвращаем все для эксперимента
+        return events;
+    }
+
+    /**
+     * Сравнение разных параметров STA/LTA.
+     * Выводит таблицу в консоль.
+     */
+    public void compareStaLtaParameters(
+            List<Double> signal,
+            int sampleRate,
+            String label) {
+
+        double[] staValues = {0.5, 1.0, 2.0, 3.0, 5.0};
+        double[] ltaValues = {5.0, 10.0, 15.0, 20.0, 30.0};
+        double[] thresholds = {1.1, 1.2, 1.5, 2.0, 2.5};
+
+        System.out.println("\n=== ЭКСПЕРИМЕНТ С ПАРАМЕТРАМИ STA/LTA: " + label + " ===");
+        System.out.printf("%-8s %-8s %-8s %-10s %-15s %-15s%n",
+                "STA(с)", "LTA(с)", "Thresh", "Событий", "Начало(с)", "Конец(с)");
+        System.out.println("-".repeat(70));
+
+        for (double sta : staValues) {
+            for (double lta : ltaValues) {
+                if (lta <= sta) continue;
+                for (double thr : thresholds) {
+                    List<DetectionEvent> events = detectWithCustomParams(
+                            signal, sampleRate, sta, lta, thr, label);
+
+                    if (!events.isEmpty()) {
+                        DetectionEvent e = events.get(0);
+                        double t0 = e.getStartSample() / (double) sampleRate;
+                        double t1 = e.getEndSample() / (double) sampleRate;
+
+                        System.out.printf("%-8.1f %-8.1f %-8.2f %-10d %-15.2f %-15.2f%n",
+                                sta, lta, thr, events.size(), t0, t1);
+                    }
+                }
+            }
+        }
+        System.out.println("-".repeat(70));
+    }
+
+// ==================== ВНУТРЕННИЙ КЛАСС ====================
+
+    /**
+     * Результат сравнения всех методов обнаружения.
+     */
+    public static class DetectionComparisonResult {
+        public final List<Double> resultAmplitude;
+        public final List<Double> azimuths;
+        public final List<Double> polarization;
+        public final double[] ratioR, ratioX, ratioY, ratioZ, ratioE, ratioMin, ratioMax;
+        public final List<DetectionEvent> evR, evX, evY, evZ, evE, evMin, evMax;
+        public final int sampleRate;
+        public final double threshold;
+
+        public DetectionComparisonResult(
+                List<Double> resultAmplitude, List<Double> azimuths, List<Double> polarization,
+                double[] ratioR, double[] ratioX, double[] ratioY, double[] ratioZ,
+                double[] ratioE, double[] ratioMin, double[] ratioMax,
+                List<DetectionEvent> evR, List<DetectionEvent> evX, List<DetectionEvent> evY,
+                List<DetectionEvent> evZ, List<DetectionEvent> evE,
+                List<DetectionEvent> evMin, List<DetectionEvent> evMax,
+                int sampleRate, double threshold) {
+            this.resultAmplitude = resultAmplitude;
+            this.azimuths = azimuths;
+            this.polarization = polarization;
+            this.ratioR = ratioR;
+            this.ratioX = ratioX;
+            this.ratioY = ratioY;
+            this.ratioZ = ratioZ;
+            this.ratioE = ratioE;
+            this.ratioMin = ratioMin;
+            this.ratioMax = ratioMax;
+            this.evR = evR;
+            this.evX = evX;
+            this.evY = evY;
+            this.evZ = evZ;
+            this.evE = evE;
+            this.evMin = evMin;
+            this.evMax = evMax;
+            this.sampleRate = sampleRate;
+            this.threshold = threshold;
+        }
+
+        /**
+         * Форматированная таблица сравнения для диплома.
+         */
+        public String toComparisonTable() {
+            StringBuilder sb = new StringBuilder();
+            sb.append("\n==============================================================\n");
+            sb.append("     СРАВНЕНИЕ МЕТОДОВ ОБНАРУЖЕНИЯ ТРАНСПОРТА\n");
+            sb.append("==============================================================\n\n");
+            sb.append(String.format("Частота дискретизации: %d Гц\n", sampleRate));
+            sb.append(String.format("Порог STA/LTA: %.2f\n", threshold));
+            sb.append(String.format("Длительность сигнала: %.1f сек\n\n",
+                    resultAmplitude.size() / (double) sampleRate));
+
+            sb.append(String.format("%-30s %8s %10s %10s %10s %10s\n",
+                    "Метод", "Событий", "Начало(с)", "Конец(с)", "Пик(с)", "Длит.(с)"));
+            sb.append("----------------------------------------------------------------------\n");
+
+            appendMethodRow(sb, "1. STA/LTA по X (N-S) отдельно", evX);
+            appendMethodRow(sb, "2. STA/LTA по Y (E-W) отдельно", evY);
+            appendMethodRow(sb, "3. STA/LTA по Z (верт.) отдельно", evZ);
+            appendMethodRow(sb, "4. STA/LTA по R (результ.)", evR);
+            appendMethodRow(sb, "5. Энергетич. STA/LTA по R", evE);
+            appendMethodRow(sb, "6. Слияние min(X,Y,Z)", evMin);
+            appendMethodRow(sb, "7. Слияние max(X,Y,Z)", evMax);
+
+            sb.append("----------------------------------------------------------------------\n\n");
+
+            // Азимут и поляризация
+            if (!azimuths.isEmpty()) {
+                double avgAz = azimuths.stream().mapToDouble(Double::doubleValue).average().orElse(0);
+                sb.append(String.format("Средний азимут: %.1f градусов (%s)\n", avgAz, azToDir(avgAz)));
+            }
+            if (!polarization.isEmpty()) {
+                double avgPol = polarization.stream().mapToDouble(Double::doubleValue).average().orElse(0);
+                sb.append(String.format("Средняя поляризация: %.3f (%s)\n", avgPol,
+                        avgPol > 0.6 ? "линейная — возможен транспорт" :
+                                avgPol > 0.3 ? "эллиптическая" : "круговая — фоновый шум"));
+            }
+
+            sb.append("\nВЫВОД: ");
+            int totalEvents = evR.size() + evX.size() + evY.size() + evZ.size() + evE.size() + evMin.size() + evMax.size();
+            if (totalEvents == 0) {
+                sb.append("Транспорт не обнаружен ни одним методом.\n");
+                sb.append("Рекомендуется: снизить порог STA/LTA или проверить чувствительность датчиков.\n");
+            } else if (evR.size() > 0 && evE.size() > 0) {
+                sb.append("Транспорт обнаружен! Методы STA/LTA по R и энергетический дали согласованный результат.\n");
+            } else {
+                sb.append("Результаты методов различаются. Рекомендуется проверка параметров детектора.\n");
+            }
+
+            return sb.toString();
+        }
+
+        private void appendMethodRow(StringBuilder sb, String name, List<DetectionEvent> events) {
+            if (events == null || events.isEmpty()) {
+                sb.append(String.format("%-30s %8d %10s %10s %10s %10s\n",
+                        name, 0, "—", "—", "—", "—"));
+            } else {
+                DetectionEvent e = events.get(0);
+                double t0 = e.getStartSample() / (double) sampleRate;
+                double t1 = e.getEndSample() / (double) sampleRate;
+                double tp = e.getPeakSample() / (double) sampleRate;
+                sb.append(String.format("%-30s %8d %10.3f %10.3f %10.3f %10.3f\n",
+                        name, events.size(), t0, t1, tp, t1 - t0));
+            }
+        }
+
+        private String azToDir(double azimuth) {
+            if (azimuth >= 337.5 || azimuth < 22.5) return "Север";
+            if (azimuth >= 22.5 && azimuth < 67.5) return "Северо-восток";
+            if (azimuth >= 67.5 && azimuth < 112.5) return "Восток";
+            if (azimuth >= 112.5 && azimuth < 157.5) return "Юго-восток";
+            if (azimuth >= 157.5 && azimuth < 202.5) return "Юг";
+            if (azimuth >= 202.5 && azimuth < 247.5) return "Юго-запад";
+            if (azimuth >= 247.5 && azimuth < 292.5) return "Запад";
+            return "Северо-запад";
+        }
     }
 }

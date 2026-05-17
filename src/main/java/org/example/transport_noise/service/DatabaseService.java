@@ -531,6 +531,47 @@ public class DatabaseService {
     }
 
     /**
+     * Сигнал с осью времени в секундах от начала выборки (для графиков STA/LTA по одной трассе).
+     */
+    public static final class TimedSignal {
+        public final List<Double> timeSeconds;
+        public final List<Double> values;
+
+        public TimedSignal(List<Double> timeSeconds, List<Double> values) {
+            this.timeSeconds = timeSeconds;
+            this.values = values;
+        }
+    }
+
+    public TimedSignal getSignalDataTimed(String fileName, int traceNumber,
+                                          String startTime, String endTime) throws SQLException {
+        List<Double> times = new ArrayList<>();
+        List<Double> values = new ArrayList<>();
+        String sql = "WITH sel AS ( "
+                + "  SELECT record_time, value FROM signal_data "
+                + "  WHERE file_name LIKE ? AND trace_number = ? "
+                + "    AND record_time >= ?::timestamp AND record_time <= ?::timestamp "
+                + "), t0 AS ( SELECT MIN(record_time) AS r0 FROM sel ) "
+                + "SELECT EXTRACT(EPOCH FROM (sel.record_time - t0.r0)), sel.value "
+                + "FROM sel CROSS JOIN t0 ORDER BY sel.record_time";
+
+        try (Connection conn = getConnection();
+             PreparedStatement pstmt = conn.prepareStatement(sql)) {
+            pstmt.setString(1, fileName + ".%");
+            pstmt.setInt(2, traceNumber);
+            pstmt.setString(3, startTime);
+            pstmt.setString(4, endTime);
+            try (ResultSet rs = pstmt.executeQuery()) {
+                while (rs.next()) {
+                    times.add(rs.getDouble(1));
+                    values.add(rs.getDouble(2));
+                }
+            }
+        }
+        return new TimedSignal(times, values);
+    }
+
+    /**
      * Получить дисперсию с фильтром по файлу и трассе
      */
     public List<Double> getVarianceData(String fileName, int traceNumber,

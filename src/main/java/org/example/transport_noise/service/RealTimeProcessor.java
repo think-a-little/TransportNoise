@@ -197,9 +197,12 @@ public class RealTimeProcessor {
             System.out.println("   Станция: " + stationName);
             System.out.println("   Длительность: " + String.format("%.2f сек", (double)minSize/sampleRate));
 
+            double staSec = TransportDetectionTuning.defaultStaSec();   // 1.0 сек
+            double ltaSec = TransportDetectionTuning.defaultLtaSec();   // 5.0 сек
+            double threshold = TransportDetectionTuning.defaultThreshold(); // 2.0
             // Выполняем анализ
             ThreeComponentAnalyzer.ThreeComponentResult analysisResult =
-                    threeComponentAnalyzer.fullAnalysis(xData, yData, zData, sampleRate);
+                    threeComponentAnalyzer.fullAnalysis(xData, yData, zData, sampleRate, staSec, ltaSec, threshold);
 
             // Сохраняем результаты
             dbService.saveThreeComponentResult(stationName, analysisResult, lat, lon, sampleRate);
