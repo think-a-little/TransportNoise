@@ -1,5 +1,6 @@
 package org.example.transport_noise.chart;
 
+import org.example.transport_noise.model.DetectionEvent;
 import org.example.transport_noise.model.FileAnalysisResult;
 import org.jfree.chart.*;
 import org.jfree.chart.annotations.XYPointerAnnotation;
@@ -182,11 +183,6 @@ public class ChartBuilder {
     }
 
     // ==================== ГРАФИКИ STA/LTA И СОБЫТИЙ ====================
-
-    public JPanel createStaLtaRatioChart(List<Double> times, double[] ratio, double threshold,
-                                         Double eventStartSec, Double eventEndSec, String title) {
-        return createStaLtaRatioChart(times, ratio, threshold, eventStartSec, eventEndSec, title, "STA/LTA", "Отношение STA/LTA");
-    }
 
     public JPanel createStaLtaRatioChart(List<Double> times, double[] ratio, double threshold,
                                          Double eventStartSec, Double eventEndSec, String title,
@@ -405,5 +401,69 @@ public class ChartBuilder {
         });
 
         chartPanel.setRefreshBuffer(true);
+    }
+
+    /**
+     * График сигнала с метками ВСЕХ обнаруженных событий.
+     */
+    public JPanel createSignalWithAllEvents(List<Double> times, List<Double> signal,
+                                            List<DetectionEvent> events, String title) {
+        XYSeries signalSeries = new XYSeries("Сигнал");
+        int size = Math.min(times.size(), signal.size());
+        for (int i = 0; i < size; i++) {
+            signalSeries.add((double) times.get(i), (double) signal.get(i));
+        }
+        XYSeriesCollection dataset = new XYSeriesCollection(signalSeries);
+
+        JFreeChart chart = ChartFactory.createXYLineChart(
+                title, "Время (с)", "Амплитуда",
+                dataset, PlotOrientation.VERTICAL, true, true, false);
+        customizeChart(chart);
+
+        XYPlot plot = chart.getXYPlot();
+
+        // Добавляем метки для КАЖДОГО события
+        if (events != null) {
+            Color[] colors = {
+                    new Color(0, 140, 0),    // зеленый
+                    new Color(0, 100, 200),  // синий
+                    new Color(200, 150, 0),  // оранжевый
+                    new Color(150, 0, 150),  // фиолетовый
+                    new Color(200, 50, 50)   // красный
+            };
+
+            for (int i = 0; i < events.size(); i++) {
+                DetectionEvent ev = events.get(i);
+                int startIdx = Math.min(ev.getStartSample(), times.size() - 1);
+                int endIdx = Math.min(ev.getEndSample(), times.size() - 1);
+                int peakIdx = Math.min(ev.getPeakSample(), times.size() - 1);
+
+                Color color = colors[i % colors.length];
+
+                // Начало события
+                ValueMarker startMarker = new ValueMarker(times.get(startIdx));
+                startMarker.setPaint(color);
+                startMarker.setStroke(new BasicStroke(2f, BasicStroke.CAP_BUTT, BasicStroke.JOIN_MITER,
+                        10f, new float[]{6f, 3f}, 0f)); // штриховая линия
+                plot.addDomainMarker(startMarker);
+
+                // Конец события
+                ValueMarker endMarker = new ValueMarker(times.get(endIdx));
+                endMarker.setPaint(color);
+                endMarker.setStroke(new BasicStroke(2f, BasicStroke.CAP_BUTT, BasicStroke.JOIN_MITER,
+                        10f, new float[]{3f, 6f}, 0f)); // другой штрих
+                plot.addDomainMarker(endMarker);
+
+                // Пик события (точка)
+                ValueMarker peakMarker = new ValueMarker(times.get(peakIdx));
+                peakMarker.setPaint(color);
+                peakMarker.setStroke(new BasicStroke(1.5f));
+                plot.addDomainMarker(peakMarker);
+            }
+        }
+
+        ChartPanel chartPanel = new ChartPanel(chart);
+        configureZooming(chartPanel);
+        return chartPanel;
     }
 }

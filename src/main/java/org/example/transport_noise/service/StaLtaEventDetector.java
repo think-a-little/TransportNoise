@@ -78,21 +78,83 @@ public final class StaLtaEventDetector {
     /**
      * Если событий несколько, оставляет одно — с наибольшим STA/LTA в точке пика.
      */
-    public static List<DetectionEvent> keepDominantEvent(List<DetectionEvent> events, double[] ratio) {
+    /**
+     * Выбирает доминирующее событие по комбинированной оценке:
+     * пик STA/LTA × log(1 + длительность) × средняя амплитуда.
+     */
+    public static List<DetectionEvent> keepDominantEvent(
+            List<DetectionEvent> events, double[] ratio, List<Double> signal) {
         if (events == null || events.isEmpty()) {
             return List.of();
         }
+
         DetectionEvent best = events.get(0);
-        double bestVal = ratioAtPeak(best, ratio);
+        double bestScore = calculateEventScore(best, ratio, signal);
+
+        System.out.println("  📊 Выбор доминирующего события:");
+        System.out.printf("     Событие 1: пик=%.2f, длит=%.3fс, сред.амп=%.6f → оценка=%.4f%n",
+                ratioAtPeak(best, ratio),
+                (best.getEndSample() - best.getStartSample()) / 1000.0,
+                calculateAvgAmplitude(best, signal),
+                bestScore);
+
         for (int i = 1; i < events.size(); i++) {
             DetectionEvent e = events.get(i);
-            double v = ratioAtPeak(e, ratio);
-            if (v > bestVal) {
-                bestVal = v;
+            double score = calculateEventScore(e, ratio, signal);
+
+            System.out.printf("     Событие %d: пик=%.2f, длит=%.3fс, сред.амп=%.6f → оценка=%.4f%n",
+                    i + 1,
+                    ratioAtPeak(e, ratio),
+                    (e.getEndSample() - e.getStartSample()) / 1000.0,
+                    calculateAvgAmplitude(e, signal),
+                    score);
+
+            if (score > bestScore) {
+                bestScore = score;
                 best = e;
             }
         }
+
+        System.out.printf("     ✅ Выбрано событие %d (оценка=%.4f)%n",
+                events.indexOf(best) + 1, bestScore);
+
         return List.of(best);
+    }
+
+    /**
+     * Комбинированная оценка события.
+     * score = пик_STA/LTA × log(1 + длительность_сек) × средняя_амплитуда
+     */
+    private static double calculateEventScore(DetectionEvent e, double[] ratio, List<Double> signal) {
+        double peakRatio = ratioAtPeak(e, ratio);
+
+        double durationSeconds = (e.getEndSample() - e.getStartSample()) / 1000.0;
+
+        double avgAmplitude = calculateAvgAmplitude(e, signal);
+
+        // log(1 + длительность) чтобы короткие события не обнулялись,
+        // но длинные получали бонус
+        double score = peakRatio * Math.log(1 + durationSeconds) * avgAmplitude;
+
+        return score;
+    }
+
+    /**
+     * Средняя амплитуда сигнала внутри события.
+     */
+    private static double calculateAvgAmplitude(DetectionEvent e, List<Double> signal) {
+        if (signal == null || signal.isEmpty()) return 1.0;
+
+        int start = Math.max(0, e.getStartSample());
+        int end = Math.min(signal.size() - 1, e.getEndSample());
+
+        if (end <= start) return 1.0;
+
+        double sum = 0;
+        for (int i = start; i <= end; i++) {
+            sum += Math.abs(signal.get(i));
+        }
+        return sum / (end - start + 1);
     }
 
     private static double ratioAtPeak(DetectionEvent e, double[] ratio) {
