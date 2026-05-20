@@ -4,13 +4,10 @@ import org.example.transport_noise.chart.ChartBuilder;
 import org.example.transport_noise.model.DetectionEvent;
 import org.example.transport_noise.service.ButterworthBandpass;
 import org.example.transport_noise.service.DatabaseService;
-import org.example.transport_noise.service.DetectionReportFormatter;
 import org.example.transport_noise.service.StaLtaEventDetector;
 import org.example.transport_noise.service.ThreeComponentAnalyzer;
 import org.example.transport_noise.service.TransportDetectionTuning;
-import org.jfree.chart.ChartFactory;
-import org.jfree.chart.ChartPanel;
-import org.jfree.chart.JFreeChart;
+import org.jfree.chart.*;
 import org.jfree.chart.plot.PlotOrientation;
 import org.jfree.chart.plot.XYPlot;
 import org.jfree.chart.renderer.xy.XYLineAndShapeRenderer;
@@ -20,6 +17,8 @@ import org.jfree.data.xy.XYSeriesCollection;
 import javax.swing.*;
 import javax.swing.table.DefaultTableModel;
 import java.awt.*;
+import java.awt.event.MouseEvent;
+import java.awt.geom.Rectangle2D;
 import java.sql.*;
 import java.util.ArrayList;
 import java.util.List;
@@ -31,8 +30,6 @@ public class MainFrame extends JFrame {
     private JComboBox<String> traceSelect;
     private JTextField startTimeField;
     private JTextField endTimeField;
-    private JTextField staField;
-    private JTextField ltaField;
     private JPanel chartPanel;
     private JTextArea infoArea;
     private MapPanel mapPanel;
@@ -51,9 +48,26 @@ public class MainFrame extends JFrame {
     private static final Color DARKER_BG = new Color(30, 30, 30);
     private static final Color ACCENT_COLOR = new Color(75, 110, 175);
     private static final Color DANGER_COLOR = new Color(200, 80, 80);
+    private static final Color APPLY_COLOR = new Color(0, 180, 100);
 
-    private double staThreshold = TransportDetectionTuning.defaultThreshold();
+    private String activeAnalysisMode = null;  // "signal", "variance", "both", "3d", "stalta", "stalta_threshold"
+
+    // Параметры анализа (сохраняются при нажатии "Применить")
+    private double currentStaSec = TransportDetectionTuning.defaultStaSec();
+    private double currentLtaSec = TransportDetectionTuning.defaultLtaSec();
+    private double currentThreshold = TransportDetectionTuning.defaultThreshold();
+    private boolean currentFilterEnabled = true;
+    private double currentLowCutHz = 2.0;
+    private double currentHighCutHz = 100.0;
+
+    // Поля ввода в панели параметров
+    private JTextField staField;
+    private JTextField ltaField;
     private JTextField thresholdField;
+    private JCheckBox filterEnabled;
+    private JTextField lowCutField;
+    private JTextField highCutField;
+    private JScrollPane chartScrollPane;
 
     public MainFrame() {
         chartBuilder = new ChartBuilder();
@@ -100,9 +114,7 @@ public class MainFrame extends JFrame {
                         updateStatus("Обновление...");
                         refreshAllDataAsync();
                     }
-                } catch (Exception e) {
-                    System.err.println("Ошибка: " + e.getMessage());
-                }
+                } catch (Exception e) { System.err.println("Ошибка: " + e.getMessage()); }
             }
         }.execute();
     }
@@ -132,18 +144,15 @@ public class MainFrame extends JFrame {
             SwingUtilities.invokeLater(() -> {
                 String selectedFile = (String) fileNameSelect.getSelectedItem();
                 fileNameSelect.removeAllItems();
-                if (newFileNames.isEmpty()) {
-                    fileNameSelect.addItem("Нет данных");
-                } else {
+                if (newFileNames.isEmpty()) fileNameSelect.addItem("Нет данных");
+                else {
                     for (String name : newFileNames) fileNameSelect.addItem(name);
                     if (selectedFile != null && newFileNames.contains(selectedFile))
                         fileNameSelect.setSelectedItem(selectedFile);
                 }
                 fileNames = newFileNames;
             });
-        } catch (SQLException e) {
-            System.err.println("Ошибка: " + e.getMessage());
-        }
+        } catch (SQLException e) { System.err.println("Ошибка: " + e.getMessage()); }
     }
 
     private void refreshDataTable() {
@@ -167,9 +176,7 @@ public class MainFrame extends JFrame {
                 tableModel.setRowCount(0);
                 for (Object[] row : rows) tableModel.addRow(row);
             });
-        } catch (SQLException e) {
-            System.err.println("Ошибка: " + e.getMessage());
-        }
+        } catch (SQLException e) { System.err.println("Ошибка: " + e.getMessage()); }
     }
 
     private void updateInfoPanelData() {
@@ -187,9 +194,7 @@ public class MainFrame extends JFrame {
                     sb.append("Отсчётов: ").append(String.format("%,d", rs.getInt("total"))).append("\n");
                 }
             }
-        } catch (SQLException e) {
-            sb.append("Ошибка: ").append(e.getMessage()).append("\n");
-        }
+        } catch (SQLException e) { sb.append("Ошибка: ").append(e.getMessage()).append("\n"); }
         if (cachedThreeComponentReport != null && !cachedThreeComponentReport.isBlank())
             sb.append("\n").append(cachedThreeComponentReport);
         final String text = sb.toString();
@@ -202,7 +207,7 @@ public class MainFrame extends JFrame {
 
     // ==================== TOP PANEL ====================
 
-    private JPanel  createTopPanel() {
+    private JPanel createTopPanel() {
         JPanel panel = new JPanel(new GridBagLayout());
         panel.setBorder(BorderFactory.createEmptyBorder(10, 10, 10, 10));
         panel.setBackground(DARKER_BG);
@@ -210,7 +215,6 @@ public class MainFrame extends JFrame {
         gbc.fill = GridBagConstraints.HORIZONTAL;
         gbc.insets = new Insets(5, 5, 5, 5);
 
-        // Файл
         gbc.gridx = 0; gbc.gridy = 0;
         panel.add(label("Файл:"), gbc);
         gbc.gridx = 1; gbc.gridwidth = 2;
@@ -219,7 +223,6 @@ public class MainFrame extends JFrame {
         fileNameSelect.addActionListener(e -> onFileSelected());
         panel.add(fileNameSelect, gbc);
 
-        // Трасса
         gbc.gridx = 0; gbc.gridy = 1; gbc.gridwidth = 1;
         panel.add(label("Трасса:"), gbc);
         gbc.gridx = 1; gbc.gridwidth = 2;
@@ -228,287 +231,214 @@ public class MainFrame extends JFrame {
         traceSelect.addActionListener(e -> onTraceSelected());
         panel.add(traceSelect, gbc);
 
-        // Начало
         gbc.gridx = 0; gbc.gridy = 2; gbc.gridwidth = 1;
         panel.add(label("Начало:"), gbc);
         gbc.gridx = 1; gbc.gridwidth = 2;
         startTimeField = textField("2025-01-01 00:00:00", 200);
         panel.add(startTimeField, gbc);
 
-        // Конец
         gbc.gridx = 0; gbc.gridy = 3; gbc.gridwidth = 1;
         panel.add(label("Конец:"), gbc);
         gbc.gridx = 1; gbc.gridwidth = 2;
         endTimeField = textField("2025-12-31 23:59:59", 200);
         panel.add(endTimeField, gbc);
 
-        // Кнопки
         gbc.gridx = 0; gbc.gridy = 4; gbc.gridwidth = 3;
-
-        JPanel buttonRow1 = new JPanel(new FlowLayout(FlowLayout.LEFT, 8, 3));
-        buttonRow1.setBackground(DARKER_BG);
-
-        // STA
-        buttonRow1.add(label("STA(с):"));
-        staField = new JTextField(String.valueOf(TransportDetectionTuning.defaultStaSec()), 4);
-        staField.setPreferredSize(new Dimension(50, 30));
-        staField.setBackground(DARK_BG);
-        staField.setForeground(Color.WHITE);
-        staField.setToolTipText("Короткое окно STA в секундах");
-        buttonRow1.add(staField);
-
-        // LTA
-        buttonRow1.add(label("LTA(с):"));
-        ltaField = new JTextField(String.valueOf(TransportDetectionTuning.defaultLtaSec()), 4);
-        ltaField.setPreferredSize(new Dimension(50, 30));
-        ltaField.setBackground(DARK_BG);
-        ltaField.setForeground(Color.WHITE);
-        ltaField.setToolTipText("Длинное окно LTA в секундах");
-        buttonRow1.add(ltaField);
-
-        // Порог
-        buttonRow1.add(label("Порог:"));
-        thresholdField = new JTextField(String.format("%.2f", TransportDetectionTuning.defaultThreshold()), 5);
-        thresholdField.setPreferredSize(new Dimension(60, 30));
-        thresholdField.setBackground(DARK_BG);
-        thresholdField.setForeground(Color.WHITE);
-        buttonRow1.add(thresholdField);
-
-        JButton applyBtn = smallButton("✓", new Color(0, 150, 100));
-        applyBtn.addActionListener(e -> {
-            try {
-                double v = Double.parseDouble(thresholdField.getText().trim());
-                if (v > 0 && v <= 10.0) { updateThreshold(v); thresholdField.setBackground(DARK_BG); }
-                else { thresholdField.setBackground(new Color(150, 50, 50)); }
-            } catch (NumberFormatException ex) { thresholdField.setBackground(new Color(150, 50, 50)); }
-        });
-        buttonRow1.add(applyBtn);
-        buttonRow1.add(new JLabel("  "));
-
-        buttonRow1.add(styledButton("📈 Сигнал", ACCENT_COLOR, e -> loadAndShowSignal()));
-        buttonRow1.add(styledButton("📊 Дисперсия", new Color(70, 150, 70), e -> loadAndShowVariance()));
-        buttonRow1.add(styledButton("📋 Сигнал + Дисперсия", new Color(200, 150, 50), e -> loadAndShowBoth()));
-        buttonRow1.add(styledButton("🔬 3D Анализ", new Color(120, 60, 180), e -> showThreeComponentResults()));
-
-        JPanel buttonRow2 = new JPanel(new FlowLayout(FlowLayout.LEFT, 8, 3));
-        buttonRow2.setBackground(DARKER_BG);
-
-        buttonRow2.add(styledButton("📉 STA/LTA 1 трасса", new Color(70, 130, 200), e -> showSingleTraceStaLta()));
-        buttonRow2.add(styledButton("📉 STA/LTA/Порог", new Color(70, 130, 200), e -> showStaLtaThresholdChart()));
-        buttonRow2.add(styledButton("🗑️ Очистить БД", DANGER_COLOR, e -> clearDatabase()));
-
-        JPanel allButtons = new JPanel(new GridLayout(2, 1, 0, 3));
-        allButtons.setBackground(DARKER_BG);
-        allButtons.add(buttonRow1);
-        allButtons.add(buttonRow2);
-
-        panel.add(allButtons, gbc);
+        JPanel buttonRow = new JPanel(new FlowLayout(FlowLayout.LEFT, 8, 3));
+        buttonRow.setBackground(DARKER_BG);
+        buttonRow.add(styledButton("📈 Сигнал", ACCENT_COLOR, e -> loadAndShowSignal()));
+        buttonRow.add(styledButton("📊 Дисперсия", new Color(70, 150, 70), e -> loadAndShowVariance()));
+        buttonRow.add(styledButton("📋 Сигнал + Дисперсия", new Color(200, 150, 50), e -> loadAndShowBoth()));
+        buttonRow.add(styledButton("🔬 3D Анализ", new Color(120, 60, 180), e -> showThreeComponentResults()));
+        buttonRow.add(styledButton("📉 STA/LTA 1 трасса", new Color(70, 130, 200), e -> showSingleTraceStaLta()));
+        buttonRow.add(styledButton("📉 STA/LTA/Порог", new Color(70, 130, 200), e -> showStaLtaThresholdChart()));
+        buttonRow.add(styledButton("📋 Отчет", new Color(0, 150, 136), e -> showComparisonReport()));
+        buttonRow.add(styledButton("🗑️ Очистить БД", DANGER_COLOR, e -> clearDatabase()));
+        panel.add(buttonRow, gbc);
         return panel;
     }
 
+    // ==================== ПАНЕЛЬ ПАРАМЕТРОВ ====================
+
+    private JPanel createAnalysisParamsPanel() {
+        JPanel panel = new JPanel(new FlowLayout(FlowLayout.LEFT, 8, 3));
+        panel.setBackground(DARKER_BG);
+
+        panel.add(label("STA(с):"));
+        staField = new JTextField(String.valueOf(currentStaSec), 4);
+        staField.setPreferredSize(new Dimension(50, 28));
+        staField.setBackground(DARK_BG); staField.setForeground(Color.WHITE);
+        panel.add(staField);
+
+        panel.add(label("LTA(с):"));
+        ltaField = new JTextField(String.valueOf(currentLtaSec), 4);
+        ltaField.setPreferredSize(new Dimension(50, 28));
+        ltaField.setBackground(DARK_BG); ltaField.setForeground(Color.WHITE);
+        panel.add(ltaField);
+
+        panel.add(label("Порог:"));
+        thresholdField = new JTextField(String.format("%.2f", currentThreshold), 4);
+        thresholdField.setPreferredSize(new Dimension(50, 28));
+        thresholdField.setBackground(DARK_BG); thresholdField.setForeground(Color.WHITE);
+        panel.add(thresholdField);
+
+        panel.add(new JLabel("  │  "));
+
+        filterEnabled = new JCheckBox("Фильтр Баттерворта");
+        filterEnabled.setSelected(currentFilterEnabled);
+        filterEnabled.setBackground(DARKER_BG); filterEnabled.setForeground(Color.WHITE);
+        panel.add(filterEnabled);
+
+        panel.add(label("Низ(Гц):"));
+        lowCutField = new JTextField(String.valueOf(currentLowCutHz), 4);
+        lowCutField.setPreferredSize(new Dimension(50, 28));
+        lowCutField.setBackground(DARK_BG); lowCutField.setForeground(Color.WHITE);
+        panel.add(lowCutField);
+
+        panel.add(label("Верх(Гц):"));
+        highCutField = new JTextField(String.valueOf(currentHighCutHz), 4);
+        highCutField.setPreferredSize(new Dimension(50, 28));
+        highCutField.setBackground(DARK_BG); highCutField.setForeground(Color.WHITE);
+        panel.add(highCutField);
+
+        panel.add(new JLabel("  "));
+
+        JButton applyBtn = new JButton("✓ Применить");
+        applyBtn.setFont(new Font("Segoe UI", Font.BOLD, 12));
+        applyBtn.setBackground(APPLY_COLOR); applyBtn.setForeground(Color.WHITE);
+        applyBtn.setFocusPainted(false); applyBtn.setCursor(new Cursor(Cursor.HAND_CURSOR));
+        applyBtn.addActionListener(e -> applyParams());
+        panel.add(applyBtn);
+
+        return panel;
+    }
+
+    private void applyParams() {
+        // Сохраняем старые значения для сравнения
+        double oldSta = currentStaSec;
+        double oldLta = currentLtaSec;
+        double oldThr = currentThreshold;
+        boolean oldFilter = currentFilterEnabled;
+        double oldLow = currentLowCutHz;
+        double oldHigh = currentHighCutHz;
+
+        // Применяем новые значения
+        try {
+            currentStaSec = Double.parseDouble(staField.getText().trim());
+            if (currentStaSec <= 0) currentStaSec = TransportDetectionTuning.defaultStaSec();
+        } catch (NumberFormatException e) { currentStaSec = TransportDetectionTuning.defaultStaSec(); }
+        try {
+            currentLtaSec = Double.parseDouble(ltaField.getText().trim());
+            if (currentLtaSec <= currentStaSec) currentLtaSec = currentStaSec + 0.1;
+        } catch (NumberFormatException e) { currentLtaSec = TransportDetectionTuning.defaultLtaSec(); }
+        try {
+            currentThreshold = Double.parseDouble(thresholdField.getText().trim());
+            if (currentThreshold <= 0) currentThreshold = TransportDetectionTuning.defaultThreshold();
+        } catch (NumberFormatException e) { currentThreshold = TransportDetectionTuning.defaultThreshold(); }
+        currentFilterEnabled = filterEnabled.isSelected();
+        try {
+            currentLowCutHz = Double.parseDouble(lowCutField.getText().trim());
+            if (currentLowCutHz < 0.1) currentLowCutHz = 0.5;
+        } catch (NumberFormatException e) { currentLowCutHz = 2.0; }
+        try {
+            currentHighCutHz = Double.parseDouble(highCutField.getText().trim());
+            if (currentHighCutHz <= currentLowCutHz) currentHighCutHz = currentLowCutHz + 10;
+        } catch (NumberFormatException e) { currentHighCutHz = 100.0; }
+
+        // Обновляем поля ввода
+        staField.setText(String.valueOf(currentStaSec));
+        ltaField.setText(String.valueOf(currentLtaSec));
+        thresholdField.setText(String.format("%.2f", currentThreshold));
+        filterEnabled.setSelected(currentFilterEnabled);
+        lowCutField.setText(String.valueOf(currentLowCutHz));
+        highCutField.setText(String.valueOf(currentHighCutHz));
+
+        // Проверяем, изменились ли параметры
+        boolean changed = (oldSta != currentStaSec) || (oldLta != currentLtaSec) ||
+                (oldThr != currentThreshold) || (oldFilter != currentFilterEnabled) ||
+                (oldLow != currentLowCutHz) || (oldHigh != currentHighCutHz);
+
+        updateStatus("✅ Параметры применены | STA=" + currentStaSec + "с LTA=" + currentLtaSec + "с Порог=" + String.format("%.2f", currentThreshold));
+
+        // Если параметры изменились — перестраиваем текущий график
+        if (changed) {
+            reloadCurrentChart();
+        }
+    }
+
     /**
-     * Показать три отдельных графика: STA, LTA и порог.
+     * Перестраивает текущий график с новыми параметрами.
      */
-    private void showStaLtaThresholdChart() {
+    private void reloadCurrentChart() {
+        // Определяем, какой график сейчас показан, и перестраиваем его
         String fn = getSelectedFile();
         int tr = getSelectedTrace();
-        if (fn == null || tr == 0) {
-            JOptionPane.showMessageDialog(this, "Выберите файл и трассу");
-            return;
+
+        if (fn == null || tr == 0) return;
+
+        // Проверяем, какой тип графика сейчас активен (по содержимому chartPanel)
+        // Самый простой способ — просто перевызвать последнюю активную кнопку
+
+        // Если открыт график сигнала или STA/LTA — перестраиваем
+        // Для этого запоминаем последнюю нажатую кнопку
+
+        // Пока используем упрощенный подход: перестраиваем, только если
+        // есть данные в chartPanel
+        if (chartPanel.getComponentCount() > 0) {
+            setCursor(Cursor.getPredefinedCursor(Cursor.WAIT_CURSOR));
+            // Вызываем текущий активный метод анализа
+            // (нужно добавить поле для отслеживания активного режима)
+            reloadActiveAnalysis();
+            setCursor(Cursor.getDefaultCursor());
         }
-        syncThresholdFromField();
+    }
 
-        final double staSec = Double.parseDouble(staField.getText().trim());
-        final double ltaSec = Double.parseDouble(ltaField.getText().trim());
-        final double thr = staThreshold;
+    private void reloadActiveAnalysis() {
+        if (activeAnalysisMode == null) return;
 
-        setCursor(Cursor.getPredefinedCursor(Cursor.WAIT_CURSOR));
+        switch (activeAnalysisMode) {
+            case "signal":
+                loadAndShowSignal();
+                break;
+            case "stalta":
+                showSingleTraceStaLta();
+                break;
+            case "3d":
+                showThreeComponentResults();
+                break;
+            case "stalta_threshold":
+                showStaLtaThresholdChart();
+                break;
+            // variance и both не используют STA/LTA — не перестраиваем
+        }
+    }
 
-        new SwingWorker<JComponent, Void>() {
-            @Override
-            protected JComponent doInBackground() throws Exception {
-                // Вкладка 1: выбранная трасса
-                JPanel singlePanel = buildStaLtaForTrace(fn, tr, staSec, ltaSec, thr);
+    // ==================== ОБЕРТКА ГРАФИКА ====================
 
-                // Вкладка 2: результирующая R = √(X²+Y²+Z²)
-                JPanel resultPanel = buildStaLtaForResultant(fn, staSec, ltaSec, thr);
+    private JPanel wrapChartWithParams(JComponent chartContent, boolean showParams) {
+        JPanel wrapper = new JPanel(new BorderLayout());
+        wrapper.setBackground(DARKER_BG);
+        if (showParams) wrapper.add(createAnalysisParamsPanel(), BorderLayout.NORTH);
+        wrapper.add(chartContent, BorderLayout.CENTER);
+        return wrapper;
+    }
 
-                JTabbedPane root = new JTabbedPane();
-                root.addTab("Трасса " + tr, singlePanel);
-                root.addTab("Результирующая R", resultPanel);
+    private void showChartWithParams(JComponent chartContent, boolean showParams) {
+        chartPanel.removeAll();
+        chartPanel.add(wrapChartWithParams(chartContent, showParams), BorderLayout.CENTER);
+        chartPanel.revalidate();
+        chartPanel.repaint();
+    }
 
-                return root;
-            }
+    // ==================== ВСПОМОГАТЕЛЬНЫЕ МЕТОДЫ ====================
 
-            /**
-             * Построить STA, LTA, STA/LTA+порог для одной трассы.
-             */
-            private JPanel buildStaLtaForTrace(String fn, int trace, double staSec, double ltaSec, double thr) {
-                try {
-                    DatabaseService.TimedSignal ts = dbService.getSignalDataTimed(fn, trace,
-                            startTimeField.getText().trim(), endTimeField.getText().trim());
+    private List<Double> applyFilterIfEnabled(List<Double> signal, int fs) {
+        if (!currentFilterEnabled) return signal;
+        return ButterworthBandpass.filter(new ArrayList<>(signal), fs, currentLowCutHz, currentHighCutHz);
+    }
 
-                    if (ts.values.isEmpty()) {
-                        return new JPanel(); // пустая панель
-                    }
-
-                    int fs = estimateFsFromTimed(ts);
-                    int staSamples = TransportDetectionTuning.staSamples(fs, staSec);
-                    int ltaSamples = TransportDetectionTuning.ltaSamples(fs, staSec, ltaSec);
-
-                    double lowCut = Math.max(0.5, fs / 500.0);
-                    List<Double> filtered = ButterworthBandpass.filter(
-                            new ArrayList<>(ts.values), fs, lowCut, 100.0);
-
-                    int m = Math.min(filtered.size(), ts.timeSeconds.size());
-                    List<Double> tt = new ArrayList<>(ts.timeSeconds.subList(0, m));
-                    List<Double> sig = new ArrayList<>(filtered.subList(0, m));
-
-                    return buildThreeStaLtaCharts(tt, sig, staSamples, ltaSamples, staSec, ltaSec, thr,
-                            fn + " тр." + trace);
-                } catch (SQLException e) {
-                    return new JPanel();
-                }
-            }
-
-            /**
-             * Построить STA, LTA, STA/LTA+порог для результирующей R.
-             */
-            private JPanel buildStaLtaForResultant(String fn, double staSec, double ltaSec, double thr) {
-                try (Connection conn = DriverManager.getConnection(
-                        "jdbc:postgresql://localhost:5432/noisedb", "postgres", "32676")) {
-
-                    List<Double> x = loadTraceForBase(conn, fn, 1, 100000);  // ← старый метод с 3 параметрами
-                    List<Double> y = loadTraceForBase(conn, fn, 2, 100000);
-                    List<Double> z = loadTraceForBase(conn, fn, 3, 100000);
-
-                    if (x.isEmpty() || y.isEmpty() || z.isEmpty()) {
-                        JPanel panel = new JPanel(new BorderLayout());
-                        panel.add(new JLabel("Нет данных для всех трех трасс", SwingConstants.CENTER), BorderLayout.CENTER);
-                        return panel;
-                    }
-
-                    int minSize = Math.min(Math.min(x.size(), y.size()), z.size());
-                    x = x.subList(0, minSize);
-                    y = y.subList(0, minSize);
-                    z = z.subList(0, minSize);
-
-                    List<Double> R = new ArrayList<>();
-                    for (int i = 0; i < minSize; i++) {
-                        R.add(Math.sqrt(x.get(i) * x.get(i) + y.get(i) * y.get(i) + z.get(i) * z.get(i)));
-                    }
-
-                    int fs = 1000;
-                    int staSamples = TransportDetectionTuning.staSamples(fs, staSec);
-                    int ltaSamples = TransportDetectionTuning.ltaSamples(fs, staSec, ltaSec);
-
-                    List<Double> tt = new ArrayList<>();
-                    for (int i = 0; i < R.size(); i++) {
-                        tt.add((double) i / fs);
-                    }
-
-                    double lowCut = Math.max(0.5, fs / 500.0);
-                    List<Double> filtered = ButterworthBandpass.filter(R, fs, lowCut, 100.0);
-
-                    return buildThreeStaLtaCharts(tt, filtered, staSamples, ltaSamples, staSec, ltaSec, thr, fn + " (R)");
-
-                } catch (Exception e) {
-                    JPanel panel = new JPanel(new BorderLayout());
-                    panel.add(new JLabel("Ошибка: " + e.getMessage(), SwingConstants.CENTER), BorderLayout.CENTER);
-                    return panel;
-                }
-            }
-
-            /**
-             * Построить три графика: STA, LTA, STA/LTA+порог.
-             */
-            private JPanel buildThreeStaLtaCharts(List<Double> tt, List<Double> sig,
-                                                  int staSamples, int ltaSamples,
-                                                  double staSec, double ltaSec, double thr,
-                                                  String label) {
-                int n = sig.size();
-                double[] staVals = new double[n];
-                double[] ltaVals = new double[n];
-                double[] ratioVals = new double[n];
-
-                for (int i = 0; i < n; i++) {
-                    int staStart = Math.max(0, i - staSamples);
-                    double staSum = 0;
-                    for (int j = staStart; j <= i; j++) staSum += Math.abs(sig.get(j));
-                    staVals[i] = staSum / (i - staStart + 1);
-
-                    int ltaStart = Math.max(0, i - ltaSamples);
-                    double ltaSum = 0;
-                    for (int j = ltaStart; j <= i; j++) ltaSum += Math.abs(sig.get(j));
-                    ltaVals[i] = ltaSum / (i - ltaStart + 1);
-
-                    ratioVals[i] = ltaVals[i] > 1e-20 ? staVals[i] / ltaVals[i] : 0;
-                }
-
-                JPanel panel = new JPanel(new GridLayout(3, 1, 4, 4));
-                panel.add(createSingleLineChart(tt, staVals,
-                        "STA (окно " + String.format("%.1f", staSec) + " сек) — " + label,
-                        "Время (с)", "STA", new Color(200, 100, 0)));
-                panel.add(createSingleLineChart(tt, ltaVals,
-                        "LTA (окно " + String.format("%.1f", ltaSec) + " сек) — " + label,
-                        "Время (с)", "LTA", new Color(0, 100, 200)));
-                panel.add(chartBuilder.createStaLtaRatioChart(tt, ratioVals, thr, null, null,
-                        label, "STA/LTA", "Отношение STA/LTA"));
-                return panel;
-            }
-
-            /**
-             * Простой график с одной линией.
-             */
-            private JPanel createSingleLineChart(List<Double> times, double[] values,
-                                                 String title, String xLabel, String yLabel, Color color) {
-                XYSeries series = new XYSeries(title);
-                int n = Math.min(times.size(), values.length);
-                for (int i = 0; i < n; i++) {
-                    double t = times.get(i);
-                    double v = values[i];
-                    series.add((double) t, (double) v);
-                }
-
-                XYSeriesCollection dataset = new XYSeriesCollection(series);
-                JFreeChart chart = ChartFactory.createXYLineChart(
-                        title, xLabel, yLabel, dataset,
-                        PlotOrientation.VERTICAL, true, true, false);
-
-                chart.setBackgroundPaint(Color.WHITE);
-                XYPlot plot = chart.getXYPlot();
-                plot.setBackgroundPaint(new Color(245, 245, 245));
-                plot.setDomainGridlinePaint(Color.LIGHT_GRAY);
-                plot.setRangeGridlinePaint(Color.LIGHT_GRAY);
-
-                XYLineAndShapeRenderer renderer = new XYLineAndShapeRenderer();
-                renderer.setSeriesPaint(0, color);
-                plot.setRenderer(renderer);
-
-                ChartPanel chartPanel = new ChartPanel(chart);
-                chartPanel.setMouseWheelEnabled(true);
-                chartPanel.setDomainZoomable(true);
-                chartPanel.setRangeZoomable(true);
-
-                JPanel panel = new JPanel(new BorderLayout());
-                panel.add(chartPanel, BorderLayout.CENTER);
-                return panel;
-            }
-
-            @Override
-            protected void done() {
-                try {
-                    JComponent c = get();
-                    chartPanel.removeAll();
-                    chartPanel.add(c, BorderLayout.CENTER);
-                    chartPanel.revalidate();
-                    chartPanel.repaint();
-                } catch (Exception ex) {
-                    JOptionPane.showMessageDialog(MainFrame.this, "Ошибка: " + ex.getMessage());
-                }
-                setCursor(Cursor.getDefaultCursor());
-            }
-        }.execute();
+    private double getLowCutHzForDisplay(int fs) {
+        return currentFilterEnabled ? currentLowCutHz : Math.max(0.5, fs / 500.0);
     }
 
     private JLabel label(String t) { JLabel l = new JLabel(t); l.setForeground(Color.WHITE); return l; }
@@ -535,34 +465,26 @@ public class MainFrame extends JFrame {
         return b;
     }
 
-    private JButton smallButton(String text, Color bg) {
-        JButton b = new JButton(text); b.setFont(new Font("Segoe UI", Font.BOLD, 12));
-        b.setBackground(bg); b.setForeground(Color.WHITE); b.setFocusPainted(false);
-        b.setCursor(new Cursor(Cursor.HAND_CURSOR));
-        return b;
-    }
-
     // ==================== CENTER PANEL ====================
 
     private JPanel createCenterPanel() {
         JTabbedPane tabs = new JTabbedPane();
         chartPanel = new JPanel(new BorderLayout());
-        chartPanel.add(new JLabel("Выберите файл, трассу и нажмите кнопку", SwingConstants.CENTER));
-        tabs.addTab("Графики", chartPanel);
-
+        chartScrollPane = new JScrollPane(chartPanel);
+        chartScrollPane.setHorizontalScrollBarPolicy(JScrollPane.HORIZONTAL_SCROLLBAR_NEVER);
+        chartScrollPane.setVerticalScrollBarPolicy(JScrollPane.VERTICAL_SCROLLBAR_AS_NEEDED);
+        chartScrollPane.getVerticalScrollBar().setUnitIncrement(20);
+        tabs.addTab("Графики", chartScrollPane);
         tableModel = new DefaultTableModel(new String[]{"Файл", "Трасса", "Начало", "Отсчётов", "Координаты"}, 0) {
             public boolean isCellEditable(int r, int c) { return false; }
         };
         dataTable = new JTable(tableModel);
         tabs.addTab("Данные", new JScrollPane(dataTable));
-
         infoArea = new JTextArea(); infoArea.setEditable(false);
         infoArea.setFont(new Font("Monospaced", Font.PLAIN, 12));
         tabs.addTab("Информация", new JScrollPane(infoArea));
-
         mapPanel = new MapPanel();
         tabs.addTab("Карта", mapPanel);
-
         JPanel p = new JPanel(new BorderLayout());
         p.add(tabs, BorderLayout.CENTER);
         return p;
@@ -622,80 +544,30 @@ public class MainFrame extends JFrame {
     // ==================== LOAD & SHOW ====================
 
     private void loadAndShowSignal() {
-        String fn = getSelectedFile();
-        int tr = getSelectedTrace();
-        if (fn == null || tr == 0) {
-            JOptionPane.showMessageDialog(this, "Выберите файл и трассу");
-            return;
-        }
-        syncThresholdFromField();
+        activeAnalysisMode = "signal";
+        String fn = getSelectedFile(); int tr = getSelectedTrace();
+        if (fn == null || tr == 0) { JOptionPane.showMessageDialog(this, "Выберите файл и трассу"); return; }
         setCursor(Cursor.getPredefinedCursor(Cursor.WAIT_CURSOR));
-
-        final double staSec = Double.parseDouble(staField.getText().trim());
-        final double ltaSec = Double.parseDouble(ltaField.getText().trim());
-        final double thr = staThreshold;
-
         new SwingWorker<Void, Void>() {
-            @Override
             protected Void doInBackground() throws Exception {
                 chartPanel.removeAll();
-
-                // Загружаем данные сигнала
-                List<Double> data = dbService.getSignalData(fn, tr,
-                        startTimeField.getText().trim(), endTimeField.getText().trim());
-
-                if (data.isEmpty()) {
-                    chartPanel.add(new JLabel("Нет данных", SwingConstants.CENTER));
-                    return null;
-                }
-
-                int fs = 1000; // или определить из БД
-
-                // Загружаем временные метки (если есть)
-                DatabaseService.TimedSignal ts = dbService.getSignalDataTimed(fn, tr,
-                        startTimeField.getText().trim(), endTimeField.getText().trim());
-                List<Double> times;
-                if (!ts.timeSeconds.isEmpty()) {
-                    times = ts.timeSeconds;
-                } else {
-                    times = new ArrayList<>();
-                    for (int i = 0; i < data.size(); i++) {
-                        times.add((double) i / fs);
-                    }
-                }
-
-                // Применяем полосовую фильтрацию
-                double lowCut = Math.max(0.5, fs / 500.0);
-                List<Double> filtered = ButterworthBandpass.filter(new ArrayList<>(data), fs, lowCut, 100.0);
-                int m = Math.min(filtered.size(), Math.min(times.size(), data.size()));
-                List<Double> tt = new ArrayList<>(times.subList(0, m));
-                List<Double> filt = new ArrayList<>(filtered.subList(0, m));
-
-                // Запускаем детектор и получаем ВСЕ события
-                ThreeComponentAnalyzer an = new ThreeComponentAnalyzer();
-                int sta = TransportDetectionTuning.staSamples(fs, staSec);
-                int lta = TransportDetectionTuning.ltaSamples(fs, staSec, ltaSec);
-                ThreeComponentAnalyzer.DetectionParams p = TransportDetectionTuning.params(fs, staSec, ltaSec, thr);
-                double[] ratio = StaLtaEventDetector.absStaLtaRatio(filt, sta, lta);
+                List<Double> d = dbService.getSignalData(fn, tr, startTimeField.getText().trim(), endTimeField.getText().trim());
+                if (d.isEmpty()) { showChartWithParams(new JLabel("Нет данных", SwingConstants.CENTER), true); return null; }
+                int fs = 1000;
+                List<Double> filtered = applyFilterIfEnabled(d, fs);
+                List<Double> tt = new ArrayList<>();
+                for (int i = 0; i < filtered.size(); i++) tt.add((double) i / fs);
+                int sta = TransportDetectionTuning.staSamples(fs, currentStaSec);
+                int lta = TransportDetectionTuning.ltaSamples(fs, currentStaSec, currentLtaSec);
+                ThreeComponentAnalyzer.DetectionParams p = TransportDetectionTuning.params(fs, currentStaSec, currentLtaSec, currentThreshold);
+                double[] ratio = StaLtaEventDetector.absStaLtaRatio(filtered, sta, lta);
                 List<DetectionEvent> allEvents = StaLtaEventDetector.pickEventsFromRatio(
-                        ratio, lta, p.staLtaThreshold, p.offRatio,
-                        p.hangSamples, p.minDurationSamples, p.cooldownSamples,
-                        fn + " тр." + tr);
-
-                // Строим график со ВСЕМИ событиями
-                JPanel signalPanel = chartBuilder.createSignalWithAllEvents(tt, filt, allEvents,
-                        "Сигнал - " + fn + " тр." + tr);
-
-                chartPanel.add(signalPanel, BorderLayout.CENTER);
+                        ratio, lta, p.staLtaThreshold, p.offRatio, p.hangSamples, p.minDurationSamples, p.cooldownSamples, fn + " тр." + tr);
+                JPanel chart = chartBuilder.createSignalWithAllEvents(tt, filtered, allEvents, "Сигнал - " + fn + " тр." + tr);
+                showChartWithParams(chart, true);
                 return null;
             }
-
-            @Override
-            protected void done() {
-                chartPanel.revalidate();
-                chartPanel.repaint();
-                setCursor(Cursor.getDefaultCursor());
-            }
+            protected void done() { chartPanel.revalidate(); chartPanel.repaint(); setCursor(Cursor.getDefaultCursor()); }
         }.execute();
     }
 
@@ -707,8 +579,8 @@ public class MainFrame extends JFrame {
             protected Void doInBackground() throws Exception {
                 chartPanel.removeAll();
                 List<Double> d = dbService.getVarianceData(fn, tr, startTimeField.getText().trim(), endTimeField.getText().trim());
-                chartPanel.add(d.isEmpty() ? new JLabel("Нет данных", SwingConstants.CENTER) :
-                        chartBuilder.createSimpleVarianceChart(d, fn + " тр." + tr));
+                JPanel chart = d.isEmpty() ? new JPanel() : chartBuilder.createSimpleVarianceChart(d, fn + " тр." + tr);
+                showChartWithParams(chart, false);  // ← без панели параметров
                 return null;
             }
             protected void done() { chartPanel.revalidate(); chartPanel.repaint(); setCursor(Cursor.getDefaultCursor()); }
@@ -727,7 +599,7 @@ public class MainFrame extends JFrame {
                 JPanel c = new JPanel(new GridLayout(2, 1));
                 if (!s.isEmpty()) c.add(chartBuilder.createSimpleSignalChart(s, 1000, "Сигнал"));
                 if (!v.isEmpty()) c.add(chartBuilder.createSimpleVarianceChart(v, "Дисперсия"));
-                chartPanel.add(s.isEmpty() && v.isEmpty() ? new JLabel("Нет данных", SwingConstants.CENTER) : c);
+                showChartWithParams(c, false);  // ← без панели параметров
                 return null;
             }
             protected void done() { chartPanel.revalidate(); chartPanel.repaint(); setCursor(Cursor.getDefaultCursor()); }
@@ -736,43 +608,10 @@ public class MainFrame extends JFrame {
 
     // ==================== 3D / STA/LTA ====================
 
-    private void syncThresholdFromField() {
-        if (thresholdField == null) return;
-        try {
-            double t = Double.parseDouble(thresholdField.getText().trim());
-            staThreshold = t;
-        } catch (NumberFormatException ignored) {}
-    }
-
-    private void updateThreshold(double t) {
-        staThreshold = t;
-        String fn = getSelectedFile();
-        if (fn != null) reloadWithNewThreshold(fn, t);
-    }
-
-    private void reloadWithNewThreshold(String fn, double thr) {
-        setCursor(Cursor.getPredefinedCursor(Cursor.WAIT_CURSOR));
-        new SwingWorker<ThreeDAnalysisPack, Void>() {
-            protected ThreeDAnalysisPack doInBackground() { return buildThreeDAnalysisPack(fn); }
-            protected void done() {
-                try {
-                    ThreeDAnalysisPack p = get();
-                    chartPanel.removeAll();
-                    if (p.panel != null) chartPanel.add(p.panel, BorderLayout.CENTER);
-                    if (p.report != null && !p.report.isEmpty()) {
-                        cachedThreeComponentReport = p.report;
-                        infoArea.setText(p.report); infoArea.setCaretPosition(0);
-                    }
-                } catch (Exception ex) { System.err.println(ex.getMessage()); }
-                chartPanel.revalidate(); chartPanel.repaint(); setCursor(Cursor.getDefaultCursor());
-            }
-        }.execute();
-    }
-
     private void showThreeComponentResults() {
+        activeAnalysisMode = "3d";
         String fn = getSelectedFile();
         if (fn == null) { JOptionPane.showMessageDialog(this, "Выберите файл"); return; }
-        syncThresholdFromField();
         setCursor(Cursor.getPredefinedCursor(Cursor.WAIT_CURSOR));
         new SwingWorker<ThreeDAnalysisPack, Void>() {
             protected ThreeDAnalysisPack doInBackground() { return buildThreeDAnalysisPack(fn); }
@@ -780,8 +619,8 @@ public class MainFrame extends JFrame {
                 try {
                     ThreeDAnalysisPack p = get();
                     chartPanel.removeAll();
-                    if (p.panel != null) chartPanel.add(p.panel, BorderLayout.CENTER);
-                    else chartPanel.add(new JLabel("Нет данных для " + fn, SwingConstants.CENTER));
+                    if (p.panel != null) showChartWithParams(p.panel, true);
+                    else showChartWithParams(new JLabel("Нет данных для " + fn, SwingConstants.CENTER), true);
                     if (p.report != null && !p.report.isEmpty()) {
                         cachedThreeComponentReport = p.report;
                         infoArea.setText(p.report); infoArea.setCaretPosition(0);
@@ -790,64 +629,56 @@ public class MainFrame extends JFrame {
                 chartPanel.revalidate(); chartPanel.repaint(); setCursor(Cursor.getDefaultCursor());
             }
         }.execute();
+    }
+
+    private void showComparisonReport() {
+        String fn = getSelectedFile();
+        if (fn == null) { JOptionPane.showMessageDialog(this, "Выберите файл"); return; }
+        infoArea.setText("Функция сравнения методов временно отключена.\nИспользуйте кнопку '📉 STA/LTA 1 трасса' для анализа.");
     }
 
     private void showSingleTraceStaLta() {
-        String fileName = getSelectedFile();
-        int trace = getSelectedTrace();
-        if (fileName == null) { JOptionPane.showMessageDialog(this, "Выберите файл"); return; }
-        if (trace < 1 || trace > 3) { JOptionPane.showMessageDialog(this, "Выберите трассу 1-3"); return; }
-        syncThresholdFromField();
-        String startTime = startTimeField.getText().trim();
-        String endTime = endTimeField.getText().trim();
+        activeAnalysisMode = "stalta";
+        String fn = getSelectedFile(); int tr = getSelectedTrace();
+        if (fn == null || tr < 1 || tr > 3) { JOptionPane.showMessageDialog(this, "Выберите файл и трассу 1-3"); return; }
         setCursor(Cursor.getPredefinedCursor(Cursor.WAIT_CURSOR));
-        final String fn = fileName;
-        final int tr = trace;
-        new SwingWorker<JComponent, Void>() {
-            protected JComponent doInBackground() throws Exception {
-                DatabaseService.TimedSignal ts = dbService.getSignalDataTimed(fn, tr, startTime, endTime);
-                if (ts.values.isEmpty()) return new JLabel("Нет данных", SwingConstants.CENTER);
+        new SwingWorker<Void, Void>() {
+            protected Void doInBackground() throws Exception {
+                DatabaseService.TimedSignal ts = dbService.getSignalDataTimed(fn, tr, startTimeField.getText().trim(), endTimeField.getText().trim());
+                if (ts.values.isEmpty()) { showChartWithParams(new JLabel("Нет данных", SwingConstants.CENTER), true); return null; }
                 int fs = estimateFsFromTimed(ts);
-
-                double staSec = Double.parseDouble(staField.getText().trim());
-                double ltaSec = Double.parseDouble(ltaField.getText().trim());
-                int sta = Math.max(2, (int)(staSec * fs));
-                int lta = Math.max(sta + 1, (int)(ltaSec * fs));
-
-                double lowCut = Math.max(0.5, fs / 500.0);
-                List<Double> filtered = ButterworthBandpass.filter(new ArrayList<>(ts.values), fs, lowCut, 100.0);
-                int m = Math.min(filtered.size(), Math.min(ts.timeSeconds.size(), ts.values.size()));
+                List<Double> filt = applyFilterIfEnabled(ts.values, fs);
+                int m = Math.min(filt.size(), ts.timeSeconds.size());
                 List<Double> tt = new ArrayList<>(ts.timeSeconds.subList(0, m));
                 List<Double> raw = new ArrayList<>(ts.values.subList(0, m));
-                List<Double> filt = new ArrayList<>(filtered.subList(0, m));
+                List<Double> ff = new ArrayList<>(filt.subList(0, m));
                 ThreeComponentAnalyzer an = new ThreeComponentAnalyzer();
-                List<DetectionEvent> ev = an.detectDominantStaLtaOnSignal(filt, fs, staSec, ltaSec, staThreshold);                Double tS = null, tE = null;
+                List<DetectionEvent> ev = an.detectDominantStaLtaOnSignal(ff, fs, currentStaSec, currentLtaSec, currentThreshold);
+                Double tS = null, tE = null;
                 if (!ev.isEmpty()) {
                     tS = tt.get(Math.min(Math.max(0, ev.get(0).getStartSample()), m - 1));
                     tE = tt.get(Math.min(Math.max(0, ev.get(0).getEndSample()), m - 1));
                 }
                 String[] comp = {"X (N–S), тр.1", "Y (E–W), тр.2", "Z, тр.3"};
+                int sta = TransportDetectionTuning.staSamples(fs, currentStaSec);
+                int lta = TransportDetectionTuning.ltaSamples(fs, currentStaSec, currentLtaSec);
                 JTabbedPane root = new JTabbedPane();
                 JPanel p1 = new JPanel(new GridLayout(2, 1));
-                p1.add(chartBuilder.createRawVsFilteredChart(tt, raw, filt, "Баттерворт " + String.format("%.2f", lowCut) + "–100 Гц", "До", "После"));
-                p1.add(chartBuilder.createStaLtaEnergyComponentsChart(tt, filt, sta, lta, "Энергия x²"));
+                p1.add(chartBuilder.createRawVsFilteredChart(tt, raw, ff, "Баттерворт " + String.format("%.2f", getLowCutHzForDisplay(fs)) + "–" + String.format("%.0f", currentHighCutHz) + " Гц", "До", "После"));
+                p1.add(chartBuilder.createStaLtaEnergyComponentsChart(tt, ff, sta, lta, "Энергия x²"));
                 root.addTab("Фильтр и энергия", p1);
-                root.addTab("STA/LTA", chartBuilder.createAmplitudeWithEventMarkers(tt, filt, tS, tE, fn + " / " + comp[tr - 1]));
-                return root;
+                root.addTab("STA/LTA", chartBuilder.createAmplitudeWithEventMarkers(tt, ff, tS, tE, fn + " / " + comp[tr - 1]));
+                showChartWithParams(root, true);
+                return null;
             }
-            protected void done() {
-                try { chartPanel.removeAll(); chartPanel.add(get(), BorderLayout.CENTER); chartPanel.revalidate(); chartPanel.repaint(); }
-                catch (Exception ex) { JOptionPane.showMessageDialog(MainFrame.this, "Ошибка: " + ex.getMessage()); }
-                setCursor(Cursor.getDefaultCursor());
-            }
+            protected void done() { chartPanel.revalidate(); chartPanel.repaint(); setCursor(Cursor.getDefaultCursor()); }
         }.execute();
     }
 
     private void clearDatabase() {
         if (JOptionPane.showConfirmDialog(this, "⚠️ Удалить ВСЕ данные из БД?", "Подтверждение", JOptionPane.YES_NO_OPTION) == JOptionPane.YES_OPTION) {
             dbService.clearAllData();
-            lastRecordCount = 0;
-            cachedThreeComponentReport = null;
+            lastRecordCount = 0; cachedThreeComponentReport = null;
             refreshAllDataAsync();
             chartPanel.removeAll(); chartPanel.revalidate(); chartPanel.repaint();
         }
@@ -889,36 +720,173 @@ public class MainFrame extends JFrame {
             }
             if (amplitudes.isEmpty()) return new ThreeDAnalysisPack(null, "Нет данных для " + fileName);
             int fs = estimateSampleRateFromTimes(times);
-
-            double staSec = Double.parseDouble(staField.getText().trim());
-            double ltaSec = Double.parseDouble(ltaField.getText().trim());
-            int sta = Math.max(2, (int)(staSec * fs));
-            int lta = Math.max(sta + 1, (int)(ltaSec * fs));
-
+            int sta = TransportDetectionTuning.staSamples(fs, currentStaSec), lta = TransportDetectionTuning.ltaSamples(fs, currentStaSec, currentLtaSec);
             List<Double> x = loadTraceForBase(c, fileName, 1, amplitudes.size());
             List<Double> y = loadTraceForBase(c, fileName, 2, amplitudes.size());
             List<Double> z = loadTraceForBase(c, fileName, 3, amplitudes.size());
             ThreeComponentAnalyzer an = new ThreeComponentAnalyzer();
-            List<DetectionEvent> evR = an.detectDominantStaLtaOnSignal(amplitudes, fs, staSec, ltaSec, staThreshold);
+            List<DetectionEvent> evR = an.detectDominantStaLtaOnSignal(amplitudes, fs, currentStaSec, currentLtaSec, currentThreshold);
             Double tS = null, tE = null;
             if (!evR.isEmpty()) { tS = evR.get(0).getStartSample() / (double) fs; tE = evR.get(0).getEndSample() / (double) fs; }
             JTabbedPane tabs = new JTabbedPane();
-
             JPanel signalPanel = new JPanel(new BorderLayout());
             signalPanel.add(chartBuilder.createSimpleSignalChart(amplitudes, fs, "Сигнал - " + fileName), BorderLayout.CENTER);
-
             JPanel staLtaPanel = new JPanel(new BorderLayout());
             staLtaPanel.add(chartBuilder.createAmplitudeWithEventMarkers(times, amplitudes, tS, tE, "STA/LTA (R) - " + fileName), BorderLayout.CENTER);
-
             JPanel overview = new JPanel(new GridLayout(2, 1));
-            overview.add(signalPanel);
-            overview.add(staLtaPanel);
+            overview.add(signalPanel); overview.add(staLtaPanel);
             tabs.addTab("Обзор", overview);
-
+            if (x.size() == amplitudes.size() && y.size() == amplitudes.size() && z.size() == amplitudes.size()) {
+                double low = getLowCutHzForDisplay(fs);
+                List<Double> xf = applyFilterIfEnabled(x, fs);
+                int m = Math.min(xf.size(), Math.min(times.size(), x.size()));
+                JPanel pp = new JPanel(new GridLayout(2, 1));
+                pp.add(chartBuilder.createRawVsFilteredChart(new ArrayList<>(times.subList(0, m)), new ArrayList<>(x.subList(0, m)), new ArrayList<>(xf.subList(0, m)), "Баттерворт " + String.format("%.2f", low) + "–" + String.format("%.0f", currentHighCutHz) + " Гц (X)", "До", "После"));
+                pp.add(chartBuilder.createStaLtaEnergyComponentsChart(new ArrayList<>(times.subList(0, m)), new ArrayList<>(xf.subList(0, m)), sta, lta, "Энергия x²"));
+                tabs.addTab("Фильтр и энергия", pp);
+            }
             return new ThreeDAnalysisPack(tabs, "");
-        } catch (SQLException e) {
-            return new ThreeDAnalysisPack(null, "Ошибка БД: " + e.getMessage());
+        } catch (SQLException e) { return new ThreeDAnalysisPack(null, "Ошибка БД: " + e.getMessage()); }
+    }
+
+    // ==================== STA/LTA/ПОРОГ ====================
+
+    private void showStaLtaThresholdChart() {
+        activeAnalysisMode = "stalta_threshold";
+        String fn = getSelectedFile(); int tr = getSelectedTrace();
+        if (fn == null || tr == 0) { JOptionPane.showMessageDialog(this, "Выберите файл и трассу"); return; }
+        setCursor(Cursor.getPredefinedCursor(Cursor.WAIT_CURSOR));
+        new SwingWorker<Void, Void>() {
+            protected Void doInBackground() throws Exception {
+                JTabbedPane root = new JTabbedPane();
+                root.addTab("Трасса " + tr, buildStaLtaForTrace(fn, tr));
+                root.addTab("Результирующая R", buildStaLtaForResultant(fn));
+                showChartWithParams(root, true);
+                return null;
+            }
+            protected void done() { chartPanel.revalidate(); chartPanel.repaint(); setCursor(Cursor.getDefaultCursor()); }
+        }.execute();
+    }
+
+    private JPanel buildStaLtaForTrace(String fn, int trace) {
+        try {
+            DatabaseService.TimedSignal ts = dbService.getSignalDataTimed(fn, trace, startTimeField.getText().trim(), endTimeField.getText().trim());
+            if (ts.values.isEmpty()) return new JPanel();
+            int fs = estimateFsFromTimed(ts);
+            List<Double> sig = applyFilterIfEnabled(ts.values, fs);
+            int m = Math.min(sig.size(), ts.timeSeconds.size());
+            List<Double> tt = new ArrayList<>(ts.timeSeconds.subList(0, m));
+            List<Double> ff = new ArrayList<>(sig.subList(0, m));
+            int sta = TransportDetectionTuning.staSamples(fs, currentStaSec);
+            int lta = TransportDetectionTuning.ltaSamples(fs, currentStaSec, currentLtaSec);
+            return buildThreeStaLtaCharts(tt, ff, sta, lta, fn + " тр." + trace);
+        } catch (SQLException e) { return new JPanel(); }
+    }
+
+    private JPanel buildStaLtaForResultant(String fn) {
+        try (Connection conn = DriverManager.getConnection("jdbc:postgresql://localhost:5432/noisedb", "postgres", "32676")) {
+            List<Double> x = loadTraceForBase(conn, fn, 1, 100000);
+            List<Double> y = loadTraceForBase(conn, fn, 2, 100000);
+            List<Double> z = loadTraceForBase(conn, fn, 3, 100000);
+            if (x.isEmpty() || y.isEmpty() || z.isEmpty()) {
+                JPanel p = new JPanel(new BorderLayout());
+                p.add(new JLabel("Нет данных для всех трех трасс", SwingConstants.CENTER), BorderLayout.CENTER);
+                return p;
+            }
+            int m = Math.min(Math.min(x.size(), y.size()), z.size());
+            x = x.subList(0, m); y = y.subList(0, m); z = z.subList(0, m);
+            List<Double> R = new ArrayList<>();
+            for (int i = 0; i < m; i++) R.add(Math.sqrt(x.get(i)*x.get(i) + y.get(i)*y.get(i) + z.get(i)*z.get(i)));
+            int fs = 1000;
+            List<Double> filt = applyFilterIfEnabled(R, fs);
+            List<Double> tt = new ArrayList<>();
+            for (int i = 0; i < filt.size(); i++) tt.add((double) i / fs);
+            int sta = TransportDetectionTuning.staSamples(fs, currentStaSec);
+            int lta = TransportDetectionTuning.ltaSamples(fs, currentStaSec, currentLtaSec);
+            return buildThreeStaLtaCharts(tt, filt, sta, lta, fn + " (R)");
+        } catch (Exception e) {
+            JPanel p = new JPanel(new BorderLayout());
+            p.add(new JLabel("Ошибка: " + e.getMessage(), SwingConstants.CENTER), BorderLayout.CENTER);
+            return p;
         }
     }
 
-}
+    private JPanel buildThreeStaLtaCharts(List<Double> tt, List<Double> sig, int staSamples, int ltaSamples, String label) {
+        int n = sig.size();
+        double[] staVals = new double[n], ltaVals = new double[n], ratioVals = new double[n];
+        for (int i = 0; i < n; i++) {
+            int staStart = Math.max(0, i - staSamples);
+            double staSum = 0;
+            for (int j = staStart; j <= i; j++) staSum += Math.abs(sig.get(j));
+            staVals[i] = staSum / (i - staStart + 1);
+            int ltaStart = Math.max(0, i - ltaSamples);
+            double ltaSum = 0;
+            for (int j = ltaStart; j <= i; j++) ltaSum += Math.abs(sig.get(j));
+            ltaVals[i] = ltaSum / (i - ltaStart + 1);
+            ratioVals[i] = ltaVals[i] > 1e-20 ? staVals[i] / ltaVals[i] : 0;
+        }
+        JPanel panel = new JPanel(new GridLayout(3, 1, 4, 4));
+        panel.add(createSingleLineChart(tt, staVals, "STA (" + String.format("%.1f", currentStaSec) + "с) — " + label, "Время (с)", "STA", new Color(200, 100, 0)));
+        panel.add(createSingleLineChart(tt, ltaVals, "LTA (" + String.format("%.1f", currentLtaSec) + "с) — " + label, "Время (с)", "LTA", new Color(0, 100, 200)));
+        panel.add(chartBuilder.createStaLtaRatioChart(tt, ratioVals, currentThreshold, null, null, label, "STA/LTA", "Отношение"));
+        return panel;
+    }
+
+    private JPanel createSingleLineChart(List<Double> times, double[] values, String title,
+                                         String xLabel, String yLabel, Color color) {
+        XYSeries series = new XYSeries(title);
+        int n = Math.min(times.size(), values.length);
+        for (int i = 0; i < n; i++) {
+            double t = times.get(i);
+            double v = values[i];
+            series.add((double) t, (double) v);
+        }
+        XYSeriesCollection dataset = new XYSeriesCollection(series);
+        JFreeChart chart = ChartFactory.createXYLineChart(title, xLabel, yLabel, dataset,
+                PlotOrientation.VERTICAL, true, true, false);
+        chart.setBackgroundPaint(Color.WHITE);
+        XYPlot plot = chart.getXYPlot();
+        plot.setBackgroundPaint(new Color(245, 245, 245));
+        plot.setDomainGridlinePaint(Color.LIGHT_GRAY);
+        plot.setRangeGridlinePaint(Color.LIGHT_GRAY);
+        XYLineAndShapeRenderer renderer = new XYLineAndShapeRenderer();
+        renderer.setSeriesPaint(0, color);
+        plot.setRenderer(renderer);
+
+        ChartPanel cp = new ChartPanel(chart);
+
+        // Включаем отображение координат при наведении
+        cp.setMouseWheelEnabled(true);
+        cp.setDomainZoomable(true);
+        cp.setRangeZoomable(true);
+        cp.setDisplayToolTips(true);
+        cp.setHorizontalAxisTrace(false);
+        cp.setVerticalAxisTrace(false);
+        cp.setPopupMenu(null);
+
+        // Добавляем обработчик движения мыши
+        cp.addChartMouseListener(new ChartMouseListener() {
+            @Override
+            public void chartMouseClicked(ChartMouseEvent event) {
+                if (event.getTrigger().getButton() == MouseEvent.BUTTON3) {
+                    cp.restoreAutoBounds();
+                }
+            }
+            @Override
+            public void chartMouseMoved(ChartMouseEvent event) {
+                XYPlot p = (XYPlot) event.getChart().getPlot();
+                Rectangle2D dataArea = cp.getChartRenderingInfo().getPlotInfo().getDataArea();
+                int mouseX = event.getTrigger().getX();
+                int mouseY = event.getTrigger().getY();
+                if (dataArea.contains(mouseX, mouseY)) {
+                    double x = p.getDomainAxis().java2DToValue(mouseX, dataArea, p.getDomainAxisEdge());
+                    double y = p.getRangeAxis().java2DToValue(mouseY, dataArea, p.getRangeAxisEdge());
+                    cp.setToolTipText(String.format("<html>Время: <b>%.3f сек</b><br>Значение: <b>%.6f</b></html>", x, y));
+                }
+            }
+        });
+
+        JPanel panel = new JPanel(new BorderLayout());
+        panel.add(cp, BorderLayout.CENTER);
+        return panel;
+    }}
