@@ -30,7 +30,7 @@ public final class TransportDetectionTuning {
         int hang = Math.max(8, sta * 3);
         int minDur = Math.max(sta, sta / 2);
         int cooldown = lta;
-        double offRatio = 0.6;
+        double offRatio = 0.72;
         return new ThreeComponentAnalyzer.DetectionParams(threshold, offRatio, hang, minDur, cooldown);
     }
 
