@@ -6,8 +6,9 @@ import java.util.ArrayList;
 import java.util.List;
 
 /**
- * Чистый энергетический детектор событий.
- * Находит моменты, где энергия сигнала в скользящем окне превышает заданный порог.
+ * Чистый энергетический детектор событий с нормализацией порога.
+ * Измеряет фоновую энергию по первым 10% записи и использует
+ * безразмерный порог (например, 2.0 = "энергия в 2 раза выше фона").
  */
 public class EnergyDetector {
 
@@ -16,11 +17,11 @@ public class EnergyDetector {
     /**
      * Обнаружение событий по превышению энергией порога.
      *
-     * @param signal        входной сигнал
-     * @param sampleRate    частота дискретизации, Гц
-     * @param windowSec     размер скользящего окна, секунды
-     * @param threshold     порог энергии (средний квадрат амплитуды в окне)
-     * @param label         метка для событий
+     * @param signal      входной сигнал (после применения scale — физические единицы)
+     * @param sampleRate  частота дискретизации, Гц
+     * @param windowSec   размер скользящего окна, секунды
+     * @param threshold   безразмерный порог (например, 2.0 = энергия в 2 раза выше фона)
+     * @param label       метка для событий
      * @return список обнаруженных событий
      */
     public static List<DetectionEvent> detect(List<Double> signal, int sampleRate,
@@ -29,20 +30,38 @@ public class EnergyDetector {
         List<DetectionEvent> events = new ArrayList<>();
         int windowSamples = Math.max(2, (int)(windowSec * sampleRate));
 
-        if (signal.size() < windowSamples) {
+        if (signal.size() < windowSamples * 2) {
             return events;
         }
+
+        int backgroundSamples = Math.max(windowSamples, signal.size() / 10);
+        double backgroundEnergy = 0;
+        for (int i = 0; i < backgroundSamples; i++) {
+            double v = signal.get(i);
+            backgroundEnergy += v * v;
+        }
+        backgroundEnergy /= backgroundSamples;
+
+        if (backgroundEnergy < 1e-20) {
+            backgroundEnergy = 1e-20;
+        }
+
+        double absoluteThreshold = threshold * backgroundEnergy;
+
+        System.out.println("  📊 Энергетический детектор: фоновая энергия = "
+                + String.format("%.3e", backgroundEnergy)
+                + ", порог = " + String.format("%.3e", absoluteThreshold)
+                + " (безразмерный = " + threshold + ")");
 
         boolean active = false;
         int startIdx = 0;
         int peakIdx = 0;
         double peakEnergy = 0;
         int hangCount = 0;
-        int hangSamples = windowSamples / 2;       // пол-окна на гистерезис
-        double offRatio = 0.5;                     // порог отключения = 50% от threshold
+        int hangSamples = windowSamples / 2;
+        double offRatio = 0.5;
 
         for (int i = windowSamples; i < signal.size(); i++) {
-            // Энергия в окне (средний квадрат амплитуды)
             double energy = 0;
             for (int j = i - windowSamples; j <= i; j++) {
                 double v = signal.get(j);
@@ -51,7 +70,7 @@ public class EnergyDetector {
             energy /= windowSamples;
 
             if (!active) {
-                if (energy > threshold) {
+                if (energy > absoluteThreshold) {
                     active = true;
                     startIdx = i;
                     peakIdx = i;
@@ -63,7 +82,7 @@ public class EnergyDetector {
                     peakEnergy = energy;
                     peakIdx = i;
                 }
-                if (energy < threshold * offRatio) {
+                if (energy < absoluteThreshold * offRatio) {
                     hangCount++;
                 } else {
                     hangCount = 0;
@@ -78,7 +97,6 @@ public class EnergyDetector {
             }
         }
 
-        // Если событие не закрылось до конца сигнала
         if (active) {
             int endIdx = signal.size() - 1;
             if (endIdx > startIdx) {

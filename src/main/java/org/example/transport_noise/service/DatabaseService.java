@@ -73,64 +73,39 @@ public class DatabaseService {
                                 "    record_time TIMESTAMP WITH TIME ZONE NOT NULL," +
                                 "    value DOUBLE PRECISION NOT NULL," +
                                 "    trace_number SMALLINT DEFAULT 1," +
+                                "    sample_count INTEGER DEFAULT 0," +
                                 "    created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()" +
                                 ")";
                 stmt.execute(createSignalData);
                 System.out.println("   ✅ Таблица signal_data создана");
             } else {
                 System.out.println("   ✅ Таблица signal_data существует");
+                // Добавляем столбец sample_count, если его нет в старой таблице
+                try {
+                    stmt.execute("ALTER TABLE signal_data ADD COLUMN IF NOT EXISTS sample_count INTEGER DEFAULT 0");
+                    System.out.println("   ✅ Столбец sample_count добавлен");
+                } catch (SQLException e) {
+                    System.out.println("   ℹ️  Столбец sample_count уже существует");
+                }
             }
 
             // 2. Таблица signal_statistics
-            if (!tableExists(conn, "signal_statistics")) {
-                System.out.println("   📊 Создание таблицы signal_statistics...");
-
-                String createSignalStatistics =
-                        "CREATE TABLE signal_statistics (" +
-                                "    id BIGSERIAL PRIMARY KEY," +
-                                "    file_name TEXT NOT NULL," +
-                                "    record_start_time TIMESTAMP WITH TIME ZONE NOT NULL," +
-                                "    second_number INTEGER NOT NULL," +
-                                "    variance DOUBLE PRECISION NOT NULL," +
-                                "    sample_count INTEGER NOT NULL," +
-                                "    latitude DOUBLE PRECISION NOT NULL," +
-                                "    longitude DOUBLE PRECISION NOT NULL," +
-                                "    UNIQUE(file_name, second_number)" +
-                                ")";
-                stmt.execute(createSignalStatistics);
-                System.out.println("   ✅ Таблица signal_statistics создана");
-            } else {
-                System.out.println("   ✅ Таблица signal_statistics существует");
-            }
-
-            // 3. Таблица three_component_analysis (ПЕРЕСОЗДАЕМ ПРИНУДИТЕЛЬНО)
-            System.out.println("   📊 Пересоздание таблицы three_component_analysis...");
-
-            // Удаляем старую версию
             try {
-                stmt.execute("DROP TABLE IF EXISTS three_component_analysis CASCADE");
-                System.out.println("   🗑️  Старая таблица удалена");
-            } catch (SQLException e) {
-                // Таблицы нет - это нормально
-            }
+                stmt.execute("DROP TABLE IF EXISTS signal_statistics CASCADE");
+            } catch (SQLException e) {}
 
-            // Создаем новую с правильной структурой
-            String createThreeCompTable =
-                    "CREATE TABLE three_component_analysis (" +
+            System.out.println("   📊 Создание таблицы signal_statistics...");
+
+            String createSignalStatistics =
+                    "CREATE TABLE signal_statistics (" +
                             "    id BIGSERIAL PRIMARY KEY," +
-                            "    station_name TEXT NOT NULL," +
-                            "    timestamp TIMESTAMP WITH TIME ZONE DEFAULT NOW()," +
-                            "    time_seconds DOUBLE PRECISION," +
-                            "    result_amplitude DOUBLE PRECISION," +
-                            "    azimuth DOUBLE PRECISION," +
-                            "    incidence_angle DOUBLE PRECISION," +
-                            "    polarization DOUBLE PRECISION," +
-                            "    is_event BOOLEAN DEFAULT FALSE," +
-                            "    latitude DOUBLE PRECISION," +
-                            "    longitude DOUBLE PRECISION" +
+                            "    file_name TEXT NOT NULL," +
+                            "    second_number INTEGER NOT NULL," +
+                            "    variance DOUBLE PRECISION NOT NULL," +
+                            "    UNIQUE(file_name, second_number)" +
                             ")";
-            stmt.execute(createThreeCompTable);
-            System.out.println("   ✅ Таблица three_component_analysis создана с time_seconds");
+            stmt.execute(createSignalStatistics);
+            System.out.println("   ✅ Таблица signal_statistics создана");
 
             // Создаем индексы
             System.out.println("   📊 Создание индексов...");
@@ -141,12 +116,7 @@ public class DatabaseService {
                 stmt.execute("CREATE INDEX IF NOT EXISTS idx_signal_data_location ON signal_data(latitude, longitude)");
                 stmt.execute("CREATE INDEX IF NOT EXISTS idx_signal_data_trace_time ON signal_data(trace_number, record_time)");
                 stmt.execute("CREATE INDEX IF NOT EXISTS idx_statistics_file ON signal_statistics(file_name)");
-                stmt.execute("CREATE INDEX IF NOT EXISTS idx_statistics_time ON signal_statistics(record_start_time)");
-
-                // Индексы для трехкомпонентного анализа
-                stmt.execute("CREATE INDEX IF NOT EXISTS idx_three_comp_station ON three_component_analysis(station_name)");
-                stmt.execute("CREATE INDEX IF NOT EXISTS idx_three_comp_time ON three_component_analysis(time_seconds)");
-                stmt.execute("CREATE INDEX IF NOT EXISTS idx_three_comp_events ON three_component_analysis(is_event)");
+                stmt.execute("CREATE INDEX IF NOT EXISTS idx_statistics_second ON signal_statistics(second_number)");
 
                 System.out.println("   ✅ Индексы созданы");
             } catch (SQLException e) {
@@ -157,7 +127,6 @@ public class DatabaseService {
             System.out.println("\n📊 Статус таблиц:");
             System.out.println("   signal_data: " + (tableExists(conn, "signal_data") ? "✅" : "❌"));
             System.out.println("   signal_statistics: " + (tableExists(conn, "signal_statistics") ? "✅" : "❌"));
-            System.out.println("   three_component_analysis: " + (tableExists(conn, "three_component_analysis") ? "✅" : "❌"));
         }
     }
 
@@ -177,24 +146,32 @@ public class DatabaseService {
      */
     public void saveAnalysisResult(FileAnalysisResult result) throws SQLException {
         String fileName = result.getFileName();
-
         System.out.println("💾 Сохранение: " + fileName);
 
+        // Шаг 1: сохраняем сырые данные в signal_data
         try (Connection conn = getConnection()) {
             conn.setAutoCommit(false);
-
             try {
                 int savedSamples = saveRawData(conn, result);
-                int savedStats = saveStatistics(conn, result);
-
                 conn.commit();
-                System.out.println("   ✅ Отсчётов: " + savedSamples + ", статистика: " + savedStats);
-
+                System.out.println("   ✅ Отсчётов сохранено: " + savedSamples);
             } catch (SQLException e) {
                 conn.rollback();
                 throw e;
-            } finally {
-                conn.setAutoCommit(true);
+            }
+        }
+
+        // Шаг 2: сохраняем статистику в signal_statistics (отдельная транзакция)
+        try (Connection conn = getConnection()) {
+            conn.setAutoCommit(false);
+            try {
+                int savedStats = saveStatistics(conn, result);
+                conn.commit();
+                System.out.println("   ✅ Статистика сохранена: " + savedStats);
+            } catch (SQLException e) {
+                System.err.println("   ❌ ОШИБКА СТАТИСТИКИ: " + e.getMessage());
+                conn.rollback();
+                throw e;
             }
         }
     }
@@ -245,31 +222,32 @@ public class DatabaseService {
             }
         }
 
+        // Обновляем sample_count для первой записи этого файла
+        String updateSamples = "UPDATE signal_data SET sample_count = ? " +
+                "WHERE file_name = ? AND id = (SELECT MIN(id) FROM signal_data WHERE file_name = ?)";
+        try (PreparedStatement pstmt = conn.prepareStatement(updateSamples)) {
+            pstmt.setInt(1, rawSamples.size());
+            pstmt.setString(2, result.getFileName());
+            pstmt.setString(3, result.getFileName());
+            pstmt.executeUpdate();
+        }
+
         return totalInserted;
     }
 
     private int saveStatistics(Connection conn, FileAnalysisResult result) throws SQLException {
-        FileHeader header = result.getHeader();
-        Timestamp recordStartTime = convertToTimestamp(header);
         List<Double> variances = result.getVariances();
-        int sampleRate = result.getSampleRate();
         int totalInserted = 0;
 
-        try (PreparedStatement pstmt = conn.prepareStatement(INSERT_STATISTICS)) {
+        String sql = "INSERT INTO signal_statistics (file_name, second_number, variance) " +
+                "VALUES (?, ?, ?) " +
+                "ON CONFLICT (file_name, second_number) DO UPDATE SET variance = EXCLUDED.variance";
+
+        try (PreparedStatement pstmt = conn.prepareStatement(sql)) {
             for (int i = 0; i < variances.size(); i++) {
                 pstmt.setString(1, result.getFileName());
-                pstmt.setTimestamp(2, recordStartTime);
-                pstmt.setInt(3, i + 1);
-                pstmt.setDouble(4, variances.get(i));
-
-                int samplesInSecond = sampleRate;
-                if (i == variances.size() - 1) {
-                    samplesInSecond = result.getTotalSamples() - (i * sampleRate);
-                }
-                pstmt.setInt(5, samplesInSecond);
-                pstmt.setDouble(6, header.getLat());
-                pstmt.setDouble(7, header.getLon());
-
+                pstmt.setInt(2, i + 1);
+                pstmt.setDouble(3, variances.get(i));
                 pstmt.addBatch();
             }
 
@@ -353,23 +331,20 @@ public class DatabaseService {
     /**
      * Получить дисперсию по номеру трассы и интервалу времени
      */
-    public List<Double> getVarianceData(int traceNumber, String startTime, String endTime) throws SQLException {
+    public List<Double> getVarianceData(String fileName, int traceNumber,
+                                        String startTime, String endTime) throws SQLException {
         List<Double> variances = new ArrayList<>();
-        String sql = "SELECT variance FROM signal_statistics " +
-                "WHERE file_name IN (" +
-                "   SELECT DISTINCT file_name FROM signal_data " +
-                "   WHERE trace_number = ? " +
-                "   AND record_time >= ?::timestamp " +
-                "   AND record_time <= ?::timestamp" +
-                ") " +
-                "ORDER BY second_number";
+
+        // Формируем точное имя файла: номер трассы - 1 = суффикс
+        String exactFileName = String.format("%s.%02d", fileName, traceNumber - 1);
+
+        String sql = "SELECT s.variance FROM signal_statistics s " +
+                "WHERE s.file_name = ? " +
+                "ORDER BY s.second_number";
 
         try (Connection conn = getConnection();
              PreparedStatement pstmt = conn.prepareStatement(sql)) {
-            pstmt.setInt(1, traceNumber);
-            pstmt.setString(2, startTime);
-            pstmt.setString(3, endTime);
-
+            pstmt.setString(1, exactFileName);
             try (ResultSet rs = pstmt.executeQuery()) {
                 while (rs.next()) {
                     variances.add(rs.getDouble("variance"));
@@ -408,22 +383,13 @@ public class DatabaseService {
         try (Connection conn = getConnection();
              Statement stmt = conn.createStatement()) {
 
-            // Отключаем проверку внешних ключей на время очистки
+            // Временно отключаем проверку внешних ключей
             stmt.execute("SET session_replication_role = 'replica'");
 
-            // Очищаем таблицы
-            int deletedStats = 0;
-            int deletedData = 0;
-
-            if (tableExists(conn, "signal_statistics")) {
-                stmt.execute("TRUNCATE TABLE signal_statistics CASCADE");
-                System.out.println("   ✅ signal_statistics очищена");
-            }
-
-            if (tableExists(conn, "signal_data")) {
-                stmt.execute("TRUNCATE TABLE signal_data CASCADE");
-                System.out.println("   ✅ signal_data очищена");
-            }
+            // Очищаем таблицы (порядок не важен)
+            stmt.execute("TRUNCATE TABLE signal_statistics");
+            stmt.execute("TRUNCATE TABLE signal_data");
+            stmt.execute("TRUNCATE TABLE THREE_COMPONENT_ANALYSIS");
 
             // Включаем обратно проверку внешних ключей
             stmt.execute("SET session_replication_role = 'origin'");
@@ -571,37 +537,7 @@ public class DatabaseService {
         return new TimedSignal(times, values);
     }
 
-    /**
-     * Получить дисперсию с фильтром по файлу и трассе
-     */
-    public List<Double> getVarianceData(String fileName, int traceNumber,
-                                        String startTime, String endTime) throws SQLException {
-        List<Double> variances = new ArrayList<>();
-        String sql = "SELECT s.variance FROM signal_statistics s " +
-                "WHERE s.file_name LIKE ? " +
-                "AND s.file_name IN (" +
-                "   SELECT DISTINCT d.file_name FROM signal_data d " +
-                "   WHERE d.trace_number = ? " +
-                "   AND d.record_time >= ?::timestamp " +
-                "   AND d.record_time <= ?::timestamp" +
-                ") " +
-                "ORDER BY s.second_number";
 
-        try (Connection conn = getConnection();
-             PreparedStatement pstmt = conn.prepareStatement(sql)) {
-            pstmt.setString(1, fileName + ".%");
-            pstmt.setInt(2, traceNumber);
-            pstmt.setString(3, startTime);
-            pstmt.setString(4, endTime);
-
-            try (ResultSet rs = pstmt.executeQuery()) {
-                while (rs.next()) {
-                    variances.add(rs.getDouble("variance"));
-                }
-            }
-        }
-        return variances;
-    }
 
     /**
      * Сохранение результатов трехкомпонентного анализа
